@@ -56,6 +56,15 @@ class ImageItem(
     val height: Float,
 ) : PageItem
 
+/** [items] drawn only inside the rectangle: the part of a table row that falls on this page. */
+class ClipItem(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    val items: List<PageItem>,
+) : PageItem
+
 data class FontSpec(
     val name: String,
     /** Em size in HWPUNIT (100 = 1 pt). */

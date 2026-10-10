@@ -175,6 +175,46 @@ class PageLayouterTest {
         assertEquals(2, pages.size)
     }
 
+    private val bodyHeight = page.height - page.marginTop - page.marginBottom - page.marginHeader - page.marginFooter
+
+    /** Text at the page top, so a later paragraph's position is its own and not pushed down by objects. */
+    private val lead = Paragraph(0, listOf(TextRun("x", 0, 0)), lineSegs = listOf(seg(0, 0)), length = 2)
+
+    /** A one-cell floating table of [lines] text lines, 1600 apart, that may break inside its row. */
+    private fun cuttableBox(lines: Int): io.hwpbyhwp.core.model.TableObject {
+        val cellParas = List(lines) { k -> Paragraph(0, listOf(TextRun("l$k", 0, 0)), lineSegs = listOf(seg(0, k * 1600)), length = 3) }
+        val height = lines * 1600
+        val cell = io.hwpbyhwp.core.model.TableCell(0, 0, 1, 1, 40000, height, 0, 0, 0, 0, 0, io.hwpbyhwp.core.model.VertAlign.TOP, cellParas)
+        return io.hwpbyhwp.core.model.TableObject(1, 1, 40000, height, 0, 0,
+            io.hwpbyhwp.core.model.ObjectPlacement.INLINE.copy(treatAsChar = false), listOf(cell),
+            pageBreak = io.hwpbyhwp.core.model.TableBreak.CELLS)
+    }
+
+    @Test
+    fun cellBreakingTableIsCutAtThePageBottomAndContinues() {
+        val anchor = Paragraph(0, listOf(cuttableBox(20)), lineSegs = listOf(seg(0, bodyHeight - 10000)), length = 9)
+        val pages = PageLayouter(doc(listOf(lead, anchor)), mono).layout()
+        assertEquals(2, pages.size)
+        val first = pages[0].items.filterIsInstance<io.hwpbyhwp.core.layout.ClipItem>().single()
+        val second = pages[1].items.filterIsInstance<io.hwpbyhwp.core.layout.ClipItem>().single()
+        // The cut falls between lines, inside the body, and the rest starts at the next page's top.
+        assertTrue(first.bottom <= bodyTop + bodyHeight)
+        assertEquals(bodyTop, second.top)
+        val cutLines = first.items.filterIsInstance<TextItem>().count { it.baseline < first.bottom }
+        assertEquals(6, cutLines)
+    }
+
+    @Test
+    fun floatingTableWithNoRoomForTwoLinesMovesToNextPage() {
+        val anchor = Paragraph(0, listOf(TextRun("a", 0, 0), cuttableBox(5)), lineSegs = listOf(seg(0, bodyHeight - 2000)), length = 10)
+        val pages = PageLayouter(doc(listOf(lead, anchor)), mono).layout()
+        assertEquals(2, pages.size)
+        assertEquals(listOf("x", "a"), pages[0].items.filterIsInstance<TextItem>().map { it.text })
+        val moved = pages[1].items.filterIsInstance<io.hwpbyhwp.core.layout.ClipItem>().single().items.filterIsInstance<TextItem>().first()
+        assertEquals("l0", moved.text)
+        assertEquals(bodyTop + 850, moved.baseline)
+    }
+
     @Test
     fun cellTextContinuesOnNextPageWhereLinePositionsRestart() {
         // A one-cell box whose second paragraph Hangul placed on the next page (vertPos back to 0).

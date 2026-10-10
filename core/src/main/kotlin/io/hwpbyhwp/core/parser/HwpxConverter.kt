@@ -48,11 +48,13 @@ import io.hwpbyhwp.core.model.TabDef
 import io.hwpbyhwp.core.model.TabStop
 import io.hwpbyhwp.core.model.TabType
 import io.hwpbyhwp.core.model.TableCell
+import io.hwpbyhwp.core.model.TableBreak
 import io.hwpbyhwp.core.model.TableObject
 import io.hwpbyhwp.core.model.TextRun
 import io.hwpbyhwp.core.model.TextWrap
 import io.hwpbyhwp.core.model.Underline
 import io.hwpbyhwp.core.model.VertAlign
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.TablePageBreak
 import kr.dogfoot.hwpxlib.`object`.HWPXFile
 import kr.dogfoot.hwpxlib.`object`.common.HWPXObject
 import kr.dogfoot.hwpxlib.`object`.common.ObjectList
@@ -479,6 +481,11 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             placement = table.toPlacement(),
             cells = cells,
             repeatHeader = table.repeatHeader() == true,
+            pageBreak = when (table.pageBreak()) {
+                TablePageBreak.NONE -> TableBreak.NONE
+                TablePageBreak.TABLE -> TableBreak.CELLS
+                else -> TableBreak.ROWS
+            },
         )
     }
 

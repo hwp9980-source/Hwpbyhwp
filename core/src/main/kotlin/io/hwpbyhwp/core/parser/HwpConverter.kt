@@ -48,11 +48,13 @@ import io.hwpbyhwp.core.model.TabDef
 import io.hwpbyhwp.core.model.TabStop
 import io.hwpbyhwp.core.model.TabType
 import io.hwpbyhwp.core.model.TableCell
+import io.hwpbyhwp.core.model.TableBreak
 import io.hwpbyhwp.core.model.TableObject
 import io.hwpbyhwp.core.model.TextRun
 import io.hwpbyhwp.core.model.TextWrap
 import io.hwpbyhwp.core.model.Underline
 import io.hwpbyhwp.core.model.VertAlign
+import kr.dogfoot.hwplib.`object`.bodytext.control.table.DivideAtPageBoundary
 import kr.dogfoot.hwplib.`object`.HWPFile
 import kr.dogfoot.hwplib.`object`.bodytext.control.Control
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlAutoNumber
@@ -415,6 +417,11 @@ internal class HwpConverter(private val hwp: HWPFile) {
             placement = t.header.toPlacement(),
             cells = cells,
             repeatHeader = table.property.isAutoRepeatTitleRow,
+            pageBreak = when (table.property.divideAtPageBoundary) {
+                DivideAtPageBoundary.NoDivide -> TableBreak.NONE
+                DivideAtPageBoundary.Divide -> TableBreak.CELLS
+                else -> TableBreak.ROWS
+            },
         )
     }
 

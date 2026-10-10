@@ -38,7 +38,9 @@ import io.hwpbyhwp.core.model.Section
 import io.hwpbyhwp.core.model.Tab
 import io.hwpbyhwp.core.model.TabType
 import io.hwpbyhwp.core.model.TableCell
+import io.hwpbyhwp.core.model.TableBreak
 import io.hwpbyhwp.core.model.TableObject
+import io.hwpbyhwp.core.model.TextWrap
 import io.hwpbyhwp.core.model.TextRun
 import io.hwpbyhwp.core.model.Underline
 import io.hwpbyhwp.core.model.VertAlign
@@ -142,6 +144,8 @@ class PageLayouter(
         private var columns = listOf(Column(0f, bodyWidth))
         private var columnIndex = 0
         private val column get() = columns[columnIndex.coerceAtMost(columns.lastIndex)]
+        /** Floating tables standing at the top of a column on this page: (column index, bottom). */
+        private val occupied = mutableListOf<Pair<Int, Float>>()
 
         private val pageFootnotes = mutableListOf<Note>()
         /** 감추기 in effect on the current page. */
@@ -201,6 +205,7 @@ class PageLayouter(
             lastVertPos = null
             afterTableTail = false
             columnIndex = 0
+            occupied.clear()
             hide = null
         }
 
@@ -318,6 +323,7 @@ class PageLayouter(
             val head = headOf(p)
             var paraTop: Float? = null
             var paraColumn = column
+            var startsColumn = false
             // The part of the paragraph on the current page/column, for its border and background.
             var chunkStart = items.size
             var chunkTop: Float? = null
@@ -340,10 +346,15 @@ class PageLayouter(
                     if (afterTableTail) seg.vertPos < it / 2 else seg.vertPos < it - PAGE_TOLERANCE
                 } == true
                 afterTableTail = false
-                if (pageHasLines && (seg.firstLineOfPage || jumpedBack)) {
+                // A floating table already fills the column where this paragraph would start: Hangul
+                // would have pushed the text below it, so a position on top of it means the next column.
+                val blocked = i == 0 && occupied.any { it.first == columnIndex && it.second > bodyTop + seg.vertPos + PAGE_TOLERANCE }
+                val moves = pageHasLines && (seg.firstLineOfPage || jumpedBack || blocked)
+                if (moves) {
                     flushBorder(isEnd = false)
-                    if (seg.firstLineOfPage || columnIndex + 1 >= columns.size) newPage() else columnIndex++
+                    if (seg.firstLineOfPage) newPage() else advanceColumn(seg.vertPos)
                 }
+                if (i == 0) startsColumn = moves || !pageHasLines
                 lastVertPos = seg.vertPos
                 if (i == 0) applyPageControls(p)
                 if (paraTop == null) { paraTop = bodyTop + seg.vertPos; paraColumn = column }
@@ -367,12 +378,49 @@ class PageLayouter(
             if (segs.isEmpty()) applyPageControls(p)
             flushBorder(isEnd = true)
             // Objects not placed in the text flow are positioned relative to the paragraph or the page.
-            val anchorTop = paraTop ?: (bodyTop + usedBottom)
+            // A paragraph opening a page or column starts at its top even where objects pushed its first line down.
+            val anchorTop = if (startsColumn) bodyTop else paraTop ?: (bodyTop + usedBottom)
+            var anchorColumn = paraColumn
             p.inlines.forEach { inline ->
                 val placement = inline.placement() ?: return@forEach
                 if (placement.treatAsChar) return@forEach
-                placeFloating(inline, placement, anchorTop, shape, paraColumn)
+                if (inline is TableObject && placement.vertRelTo == RelTo.PARA && startsPastBottom(inline, anchorTop + placement.vertOffset)) {
+                    // Hangul moves a table that cannot start here to the top of the next column; the
+                    // paragraph's other objects follow it there.
+                    advanceColumn(0)
+                    lastVertPos = null // positions after this count in the new column
+                    anchorColumn = column
+                    placeFloating(inline, placement, bodyTop, shape, anchorColumn)
+                } else {
+                    placeFloating(inline, placement, anchorTop, shape, anchorColumn)
+                }
             }
+        }
+
+        /** Not even the first piece of [table] Hangul could leave on this page fits between [top] and the body bottom. */
+        private fun startsPastBottom(table: TableObject, top: Float): Boolean {
+            if (top <= bodyTop + PAGE_TOLERANCE) return false
+            val grid = gridFor(table)
+            val firstBand = rowBands(table, grid.rowHeights.size).firstOrNull() ?: return false
+            // Cells whose stored lines continue on a later page show Hangul started the table here.
+            if (firstBand.any { rowSplitsAcrossPages(table, it) }) return false
+            val piece = when (table.pageBreak) {
+                TableBreak.NONE -> grid.rowY(grid.rowHeights.size)
+                TableBreak.ROWS -> grid.rowY(firstBand.last + 1)
+                // Two lines of every cell, with the cell's margins: a table is not left a single line.
+                TableBreak.CELLS -> table.cells.filter { it.row in firstBand }.maxOfOrNull { c ->
+                    val seg = c.paragraphs.flatMap { it.lineSegs }.take(2).lastOrNull() ?: return@maxOfOrNull 0
+                    c.marginTop + seg.vertPos + seg.height + c.marginBottom
+                } ?: 0
+            }
+            return top + piece > bodyTop + bodyHeight + PAGE_TOLERANCE
+        }
+
+        /** Moves on to the next column (or page), skipping columns a floating table already fills down to [vertPos]. */
+        private fun advanceColumn(vertPos: Int) {
+            do {
+                if (columnIndex + 1 >= columns.size) newPage() else columnIndex++
+            } while (occupied.any { it.first == columnIndex && it.second > bodyTop + vertPos + PAGE_TOLERANCE })
         }
 
         /** Background goes under the paragraph's items (inserted at [insertAt]); lines go on top. */
@@ -413,10 +461,17 @@ class PageLayouter(
                 RelTo.COLUMN -> bodyLeft + col.x
                 RelTo.PARA -> bodyLeft + col.x + shape.marginLeft
             }
-            val y = pl.vertOffset + when (pl.vertRelTo) {
+            var y = pl.vertOffset + when (pl.vertRelTo) {
                 RelTo.PAPER -> 0f
                 RelTo.PAGE, RelTo.COLUMN -> bodyTop
                 RelTo.PARA -> paraTop
+            }
+            // Objects are kept on the page (쪽 영역 안으로 제한).
+            if (pl.vertRelTo == RelTo.PARA && y < 0f) y = bodyTop
+            if (obj is TableObject && pl.wrap == TextWrap.TOP_AND_BOTTOM && y <= bodyTop + PAGE_TOLERANCE * 20) {
+                val center = x - bodyLeft + obj.objWidth() / 2f
+                val index = columns.indexOfFirst { center >= it.x && center <= it.x + it.width }
+                if (index >= 0) occupied += index to y + obj.objHeight()
             }
             when (obj) {
                 is TableObject -> placeTableOnPage(obj, x, y)
@@ -434,6 +489,10 @@ class PageLayouter(
             val headerRows = if (table.repeatHeader) table.cells.filter { it.isHeader }.maxOfOrNull { it.row + it.rowSpan } ?: 0 else 0
             var rowStart = 0
             var y = top
+            if (table.pageBreak == TableBreak.CELLS) {
+                y = placeCellBreakingTable(table, grid, x, top, headerRows)
+                rowStart = grid.rowHeights.size
+            }
             while (rowStart < grid.rowHeights.size) {
                 if (rowSplitsAcrossPages(table, rowStart)) {
                     // Hangul broke this row's cells across pages; follow its line positions. Checked
@@ -476,6 +535,103 @@ class PageLayouter(
                 pageHasLines = true
                 lastVertPos = (y - bodyTop).toInt()
                 afterTableTail = true
+            }
+        }
+
+        /**
+         * 나눔: rows are kept together in bands (rows joined by merged cells); a band that
+         * does not fit is cut at the page bottom, between text lines, and continues on the next page.
+         * Returns the y below the table.
+         */
+        private fun placeCellBreakingTable(table: TableObject, grid: TableGrid, x: Float, top: Float, headerRows: Int): Float {
+            var y = top
+            var pageStart = top
+            for (band in rowBands(table, grid.rowHeights.size)) {
+                if (band.any { rowSplitsAcrossPages(table, it) }) {
+                    // Hangul's own line positions say where the cells continue: follow them row by row.
+                    for (row in band) {
+                        if (rowSplitsAcrossPages(table, row)) {
+                            y = placeSplitRow(table, grid, row, x, y, headerRows)
+                        } else {
+                            val h = grid.rowHeights[row]
+                            if (y + h > bodyTop + bodyHeight + PAGE_TOLERANCE && y > bodyTop + PAGE_TOLERANCE) {
+                                newPage()
+                                y = bodyTop + repeatHeader(table, grid, headerRows, x, row)
+                            }
+                            drawTableRows(table, grid, row..row, x, y, items)
+                            y += h
+                        }
+                        usedBottom = maxOf(usedBottom, y - bodyTop)
+                    }
+                    pageStart = Float.NEGATIVE_INFINITY
+                    continue
+                }
+                val height = (grid.rowY(band.last + 1) - grid.rowY(band.first)).toFloat()
+                var obstacles: List<ClosedFloatingPointRange<Float>>? = null
+                var offset = 0f
+                while (true) {
+                    val room = bodyTop + bodyHeight - y
+                    if (height - offset <= room + PAGE_TOLERANCE) {
+                        drawBandPiece(table, grid, band, x, y, offset, height - offset, height)
+                        y += height - offset
+                        usedBottom = maxOf(usedBottom, y - bodyTop)
+                        break
+                    }
+                    val lines = obstacles ?: bandObstacles(table, grid, band, x).also { obstacles = it }
+                    var cut = cutBetweenLines(lines, offset, offset + room)
+                    if (cut <= offset + PAGE_TOLERANCE) {
+                        if (y > pageStart + PAGE_TOLERANCE) {
+                            // Not even one line fits here: start the band on the next page.
+                            newPage()
+                            y = bodyTop + repeatHeader(table, grid, headerRows, x, band.first)
+                            pageStart = y
+                            continue
+                        }
+                        cut = offset + room // a line taller than the page is cut through
+                    }
+                    drawBandPiece(table, grid, band, x, y, offset, cut - offset, height)
+                    newPage()
+                    y = bodyTop + repeatHeader(table, grid, headerRows, x, band.first)
+                    pageStart = y
+                    offset = cut
+                }
+            }
+            return y
+        }
+
+        /** Draws the slice [offset, offset + length) of [band] at [y], clipped, with borders closing the cut edges. */
+        private fun drawBandPiece(
+            table: TableObject, grid: TableGrid, band: IntRange, x: Float, y: Float, offset: Float, length: Float, height: Float,
+        ) {
+            val origin = y - offset
+            val content = mutableListOf<PageItem>()
+            drawTableRows(table, grid, band, x, origin, content)
+            // Borders on the table's own edges are drawn whole; only the cut edges are clipped flat.
+            val slack = 200f
+            val clipTop = if (offset <= 0f) y - slack else y
+            val clipBottom = if (offset + length >= height) y + length + slack else y + length
+            items += ClipItem(x - slack, clipTop, x + grid.colX(Int.MAX_VALUE) + slack, clipBottom, content)
+            for (cell in table.cells.filter { it.row in band }) {
+                val bf = document.borderFill(cell.borderFillId) ?: continue
+                val cellTop = (grid.rowY(cell.row) - grid.rowY(band.first)).toFloat()
+                val cellBottom = (grid.rowY(minOf(cell.row + cell.rowSpan, band.last + 1)) - grid.rowY(band.first)).toFloat()
+                val cx = x + grid.colX(cell.col)
+                val w = grid.cellWidth(cell).toFloat()
+                if (cellTop < offset && cellBottom > offset) border(bf.top, cx, y, cx + w, y, items)
+                if (cellTop < offset + length && cellBottom > offset + length) border(bf.bottom, cx, y + length, cx + w, y + length, items)
+            }
+        }
+
+        /** Vertical extents of the text and pictures in [band], relative to its top. */
+        private fun bandObstacles(table: TableObject, grid: TableGrid, band: IntRange, x: Float): List<ClosedFloatingPointRange<Float>> {
+            val content = mutableListOf<PageItem>()
+            drawTableRows(table, grid, band, x, 0f, content)
+            return content.mapNotNull {
+                when (it) {
+                    is TextItem -> (it.baseline - it.font.size * 0.85f)..(it.baseline + it.font.size * 0.25f)
+                    is ImageItem -> it.top..(it.top + it.height)
+                    else -> null
+                }
             }
         }
 
@@ -916,6 +1072,32 @@ class PageLayouter(
         }
     }
 
+    /** Consecutive rows that merged cells tie together; a page break can only fall between bands. */
+    private fun rowBands(table: TableObject, rows: Int): List<IntRange> {
+        val bands = mutableListOf<IntRange>()
+        var start = 0
+        while (start < rows) {
+            var end = start + 1
+            var r = start
+            while (r < end) {
+                table.cells.filter { it.row == r }.forEach { end = maxOf(end, it.row + it.rowSpan) }
+                r++
+            }
+            end = end.coerceAtMost(rows)
+            bands += start until end
+            start = end
+        }
+        return bands
+    }
+
+    /** The lowest position in (from, limit] that does not cut through any of [lines]; from if none. */
+    private fun cutBetweenLines(lines: List<ClosedFloatingPointRange<Float>>, from: Float, limit: Float): Float {
+        val live = lines.filter { it.endInclusive > from }
+        fun clear(c: Float) = live.none { it.start < c - 1 && it.endInclusive > c + 1 }
+        if (clear(limit)) return limit
+        return live.flatMap { listOf(it.start, it.endInclusive) }.filter { it > from && it <= limit && clear(it) }.maxOrNull() ?: from
+    }
+
     /**
      * A cell's lines grouped by page: a stored vertical position lower than the previous line's
      * marks where Hangul continued the cell on the next page. Each entry is (paragraph, line index).
@@ -942,7 +1124,7 @@ class PageLayouter(
         val needed = IntArray(table.cells.size) { i ->
             val cell = table.cells[i]
             val width = (base.cellWidth(cell) - cell.marginLeft - cell.marginRight).toFloat()
-            val content = frameSegments(cell.paragraphs, width).flatMap { it.second }.maxOfOrNull { it.vertPos + it.height } ?: 0
+            val content = frameContentHeight(frameSegments(cell.paragraphs, width)).toInt()
             if (content == 0) 0 else content + cell.marginTop + cell.marginBottom
         }
         return base.withContentHeights(table.cells, needed)
@@ -951,7 +1133,7 @@ class PageLayouter(
     private fun placeCellContent(cell: TableCell, cx: Float, cy: Float, w: Float, h: Float, out: MutableList<PageItem>) {
         val innerWidth = w - cell.marginLeft - cell.marginRight
         val frame = frameSegments(cell.paragraphs, innerWidth)
-        val contentHeight = frame.flatMap { it.second }.maxOfOrNull { (it.vertPos + it.height).toFloat() } ?: 0f
+        val contentHeight = frameContentHeight(frame)
         val innerHeight = h - cell.marginTop - cell.marginBottom
         val dy = when (cell.vertAlign) {
             VertAlign.TOP -> 0f
@@ -959,6 +1141,37 @@ class PageLayouter(
             VertAlign.BOTTOM -> (innerHeight - contentHeight).coerceAtLeast(0f)
         }
         placeFrame(frame, cx + cell.marginLeft, cy + cell.marginTop + dy, innerWidth, out)
+    }
+
+    /**
+     * Height a frame's content takes: its lines, and the objects floating in it (placed as in
+     * [placeFrame]), which Hangul counts when it sizes and aligns a cell.
+     */
+    private fun frameContentHeight(frame: List<Pair<Paragraph, List<LineSeg>>>): Float {
+        var bottom = frame.flatMap { it.second }.maxOfOrNull { (it.vertPos + it.height).toFloat() } ?: 0f
+        val starts = paragraphStarts(frame)
+        for ((index, entry) in frame.withIndex()) for (inline in entry.first.inlines) {
+            val pl = inline.placement() ?: continue
+            if (pl.treatAsChar) continue
+            // A table grows rows to fit their text, so it can be taller than its stored size.
+            val height = if (inline is TableObject) maxOf(inline.objHeight(), gridFor(inline).let { it.rowY(it.rowHeights.size) }) else inline.objHeight()
+            bottom = maxOf(bottom, (starts[index] + pl.vertOffset + height).toFloat())
+        }
+        return bottom
+    }
+
+    /**
+     * Where each paragraph of a frame starts, which is what its floating objects are offset from:
+     * the end of the previous paragraph. The first line can sit lower, pushed below an object.
+     */
+    private fun paragraphStarts(frame: List<Pair<Paragraph, List<LineSeg>>>): List<Int> {
+        var cursor = 0
+        return frame.map { (_, segs) ->
+            val first = segs.firstOrNull()?.vertPos ?: cursor
+            minOf(cursor, first).also { start ->
+                cursor = segs.lastOrNull()?.let { it.vertPos + it.height + it.spacing } ?: start
+            }
+        }
     }
 
     /** Lays [paragraphs] into a box without pagination (cells, headers, footers). */
@@ -987,6 +1200,7 @@ class PageLayouter(
         frame: List<Pair<Paragraph, List<LineSeg>>>, left: Float, top: Float, width: Float, out: MutableList<PageItem>,
         firstHead: ParagraphHeads.Head? = null,
     ) {
+        val starts = paragraphStarts(frame)
         for ((index, entry) in frame.withIndex()) {
             val (p, segs) = entry
             val shape = document.paraShape(p.paraShapeId)
@@ -1001,7 +1215,7 @@ class PageLayouter(
             }
             p.inlines.forEach { inline ->
                 val pl = inline.placement() ?: return@forEach
-                if (!pl.treatAsChar) placeNested(inline, left + pl.horzOffset, top + (segs.firstOrNull()?.vertPos ?: 0) + pl.vertOffset, out)
+                if (!pl.treatAsChar) placeNested(inline, left + pl.horzOffset, top + starts[index] + pl.vertOffset, out)
             }
         }
     }
@@ -1079,7 +1293,7 @@ class PageLayouter(
             val b = transformedBox(s, m)
             val width = (b.width - tb.marginLeft - tb.marginRight).toFloat()
             val frame = frameSegments(tb.paragraphs, width)
-            val contentHeight = frame.flatMap { it.second }.maxOfOrNull { (it.vertPos + it.height).toFloat() } ?: 0f
+            val contentHeight = frameContentHeight(frame)
             val inner = (b.height - tb.marginTop - tb.marginBottom).toFloat()
             val dy = when (tb.vertAlign) {
                 VertAlign.TOP -> 0f

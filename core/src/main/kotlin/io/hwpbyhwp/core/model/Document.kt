@@ -348,8 +348,19 @@ data class TableObject(
     val cells: List<TableCell>,
     /** Repeat the first row(s) marked as header on every page the table spans. */
     val repeatHeader: Boolean = false,
+    /** How the table continues past the bottom of a page (쪽 경계에서 나눔). */
+    val pageBreak: TableBreak = TableBreak.ROWS,
     override val start: Int = 0,
 ) : Inline
+
+enum class TableBreak {
+    /** 나누지 않음: the whole table moves on. */
+    NONE,
+    /** 셀 단위로 나눔: the table breaks between rows; a row moves on whole. */
+    ROWS,
+    /** 나눔: the table breaks right at the page end, cutting through rows; their cells continue on the next page. */
+    CELLS,
+}
 
 data class TableCell(
     val row: Int,

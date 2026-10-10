@@ -8,9 +8,11 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.util.LruCache
+import io.hwpbyhwp.core.layout.ClipItem
 import io.hwpbyhwp.core.layout.ImageItem
 import io.hwpbyhwp.core.layout.LineItem
 import io.hwpbyhwp.core.layout.Page
+import io.hwpbyhwp.core.layout.PageItem
 import io.hwpbyhwp.core.layout.PathItem
 import io.hwpbyhwp.core.layout.PathOp
 import io.hwpbyhwp.core.layout.RectItem
@@ -32,53 +34,61 @@ class PagePainter(private val binaries: Map<String, ByteArray>) {
 
     fun draw(canvas: Canvas, page: Page, scale: Float) {
         canvas.drawColor(0xFFFFFFFF.toInt())
-        for (item in page.items) {
-            when (item) {
-                is RectItem -> {
-                    fill.color = item.fill
-                    canvas.drawRect(item.left * scale, item.top * scale, item.right * scale, item.bottom * scale, fill)
+        page.items.forEach { draw(canvas, it, scale) }
+    }
+
+    private fun draw(canvas: Canvas, item: PageItem, scale: Float) {
+        when (item) {
+            is ClipItem -> {
+                canvas.save()
+                canvas.clipRect(item.left * scale, item.top * scale, item.right * scale, item.bottom * scale)
+                item.items.forEach { draw(canvas, it, scale) }
+                canvas.restore()
+            }
+            is RectItem -> {
+                fill.color = item.fill
+                canvas.drawRect(item.left * scale, item.top * scale, item.right * scale, item.bottom * scale, fill)
+            }
+            is LineItem -> {
+                val w = (item.width * scale).coerceAtLeast(1f)
+                stroke.color = item.color
+                stroke.strokeWidth = w
+                stroke.pathEffect = dashFor(item.style, w)
+                canvas.drawLine(item.x1 * scale, item.y1 * scale, item.x2 * scale, item.y2 * scale, stroke)
+            }
+            is TextItem -> {
+                text.typeface = Fonts.typeface(item.font)
+                text.textSize = item.font.size * scale
+                text.textScaleX = item.scaleX
+                text.color = item.color
+                val y = item.baseline * scale
+                for (i in item.text.indices) {
+                    canvas.drawText(item.text, i, i + 1, item.xs[i] * scale, y, text)
                 }
-                is LineItem -> {
-                    val w = (item.width * scale).coerceAtLeast(1f)
-                    stroke.color = item.color
+            }
+            is PathItem -> {
+                val path = Path()
+                item.ops.forEach { op ->
+                    when (op) {
+                        is PathOp.MoveTo -> path.moveTo(op.x * scale, op.y * scale)
+                        is PathOp.LineTo -> path.lineTo(op.x * scale, op.y * scale)
+                        is PathOp.CubicTo -> path.cubicTo(op.x1 * scale, op.y1 * scale, op.x2 * scale, op.y2 * scale, op.x * scale, op.y * scale)
+                        PathOp.Close -> path.close()
+                    }
+                }
+                item.fill?.let { fill.color = it; canvas.drawPath(path, fill) }
+                item.stroke?.let {
+                    val w = (item.strokeWidth * scale).coerceAtLeast(1f)
+                    stroke.color = it
                     stroke.strokeWidth = w
                     stroke.pathEffect = dashFor(item.style, w)
-                    canvas.drawLine(item.x1 * scale, item.y1 * scale, item.x2 * scale, item.y2 * scale, stroke)
+                    canvas.drawPath(path, stroke)
                 }
-                is TextItem -> {
-                    text.typeface = Fonts.typeface(item.font)
-                    text.textSize = item.font.size * scale
-                    text.textScaleX = item.scaleX
-                    text.color = item.color
-                    val y = item.baseline * scale
-                    for (i in item.text.indices) {
-                        canvas.drawText(item.text, i, i + 1, item.xs[i] * scale, y, text)
-                    }
-                }
-                is PathItem -> {
-                    val path = Path()
-                    item.ops.forEach { op ->
-                        when (op) {
-                            is PathOp.MoveTo -> path.moveTo(op.x * scale, op.y * scale)
-                            is PathOp.LineTo -> path.lineTo(op.x * scale, op.y * scale)
-                            is PathOp.CubicTo -> path.cubicTo(op.x1 * scale, op.y1 * scale, op.x2 * scale, op.y2 * scale, op.x * scale, op.y * scale)
-                            PathOp.Close -> path.close()
-                        }
-                    }
-                    item.fill?.let { fill.color = it; canvas.drawPath(path, fill) }
-                    item.stroke?.let {
-                        val w = (item.strokeWidth * scale).coerceAtLeast(1f)
-                        stroke.color = it
-                        stroke.strokeWidth = w
-                        stroke.pathEffect = dashFor(item.style, w)
-                        canvas.drawPath(path, stroke)
-                    }
-                }
-                is ImageItem -> {
-                    val dst = RectF(item.left * scale, item.top * scale, (item.left + item.width) * scale, (item.top + item.height) * scale)
-                    val bmp = bitmap(item.binId, dst.width().toInt(), dst.height().toInt())
-                    if (bmp != null) canvas.drawBitmap(bmp, null, dst, bitmapPaint) else canvas.drawRect(dst, placeholder)
-                }
+            }
+            is ImageItem -> {
+                val dst = RectF(item.left * scale, item.top * scale, (item.left + item.width) * scale, (item.top + item.height) * scale)
+                val bmp = bitmap(item.binId, dst.width().toInt(), dst.height().toInt())
+                if (bmp != null) canvas.drawBitmap(bmp, null, dst, bitmapPaint) else canvas.drawRect(dst, placeholder)
             }
         }
     }
