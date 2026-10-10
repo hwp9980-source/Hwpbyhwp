@@ -12,8 +12,21 @@ android {
         applicationId = "io.hwpbyhwp.viewer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI run number keeps every build newer than the last, so it installs as an update.
+        versionCode = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() ?: 1
+        versionName = "0.1." + (providers.environmentVariable("GITHUB_RUN_NUMBER").orNull ?: "0")
+    }
+
+    signingConfigs {
+        // A fixed debug key in the repository: CI machines would otherwise each generate their own,
+        // and Android refuses to update an app with an APK signed by a different key.
+        // Not secret — it only signs debug builds.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {

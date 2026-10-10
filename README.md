@@ -13,6 +13,7 @@
 - 두 형식을 `core/model/Document.kt`의 공통 모델로 변환한 뒤 렌더링한다. 길이 단위는 HWPUNIT(1/7200 inch).
 - `app` 모듈은 `-PwithApp`을 줄 때만 포함된다. Android SDK 없이도 core를 빌드·테스트할 수 있게 하기 위함.
 - CI(GitHub Actions)는 core 테스트 후 디버그 APK를 빌드해 아티팩트로 올린다.
+- 디버그 APK는 저장소의 고정 키(`app/debug.keystore`, 비밀 아님)로 서명하고 버전 코드는 CI 실행 번호를 쓴다. 그래서 새 빌드를 기존 설치 위에 업데이트로 설치할 수 있다.
 
 ## 단위 메모
 
