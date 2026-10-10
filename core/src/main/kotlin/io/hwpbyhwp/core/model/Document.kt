@@ -42,7 +42,7 @@ data class Document(
                 is ShapeObject -> inline.text?.paragraphs?.forEach { appendParagraph(it) }
                 is Note -> append(inline.label)
                 is EquationObject -> append(inline.script)
-                is PictureObject, is ColumnDefine, is HeaderFooter, is PageNumberPosition -> Unit
+                is PictureObject, is ColumnDefine, is HeaderFooter, is PageNumberPosition, is NewPageNumber, is PageHide -> Unit
             }
         }
         append('\n')
@@ -54,6 +54,8 @@ data class Section(
     val paragraphs: List<Paragraph>,
     /** Numbering used by outline-level paragraphs (개요 번호) in this section. */
     val outlineNumberingId: Int = 1,
+    /** Page number of the section's first page; 0 continues from the previous section. */
+    val pageStartNumber: Int = 0,
 )
 
 /** 문단 번호 / 개요 번호 definition: one entry per level. */
@@ -191,6 +193,19 @@ data class PageNumberPosition(
     val place: PageNumberPlace,
     val prefix: String = "",
     val suffix: String = "",
+    override val start: Int = 0,
+) : Inline
+
+/** 새 번호 지정 for pages: the page holding this control gets [number]; later pages count on. */
+data class NewPageNumber(val number: Int, override val start: Int = 0) : Inline
+
+/** 감추기: hides decorations on the page that holds this control. */
+data class PageHide(
+    val header: Boolean,
+    val footer: Boolean,
+    val pageNumber: Boolean,
+    val border: Boolean,
+    val fill: Boolean,
     override val start: Int = 0,
 ) : Inline
 

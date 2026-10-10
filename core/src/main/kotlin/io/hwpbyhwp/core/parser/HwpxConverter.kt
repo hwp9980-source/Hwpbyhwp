@@ -19,6 +19,8 @@ import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.EquationObject
 import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.NewPageNumber
+import io.hwpbyhwp.core.model.PageHide
 import io.hwpbyhwp.core.model.Note
 import io.hwpbyhwp.core.model.NoteKind
 import io.hwpbyhwp.core.model.HeaderFooterKind
@@ -83,6 +85,8 @@ import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.EndNote
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.FootNote
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.Footer
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.Header
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.NewNum
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.PageHiding
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.PageNum
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.ApplyPageType
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.NumType
@@ -137,7 +141,8 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
                 ?.let { page = it.toPageSetup() }
             section.paras().firstOrNull()?.runs()?.firstNotNullOfOrNull { it.secPr()?.outlineShapeIDRef()?.toIntOrNull() }
                 ?.let { outline = it }
-            Section(page, convertParagraphs(section), outline)
+            val pageStart = section.paras().firstOrNull()?.runs()?.firstNotNullOfOrNull { it.secPr()?.startNum()?.page() } ?: 0
+            Section(page, convertParagraphs(section), outline, pageStart)
         }
         return Document(
             sections = sections,
@@ -273,6 +278,11 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
                 else -> AutoNumberKind.OTHER
             },
             shape, position,
+        )
+        is NewNum -> if (ctrl.numType() == NumType.PAGE) NewPageNumber(ctrl.num() ?: 1, position) else null
+        is PageHiding -> PageHide(
+            ctrl.hideHeader() == true, ctrl.hideFooter() == true, ctrl.hidePageNum() == true,
+            ctrl.hideBorder() == true, ctrl.hideFill() == true, position,
         )
         is FootNote -> Note(NoteKind.FOOTNOTE, ctrl.number() ?: 0, ctrl.suffixChar().orEmpty().ifEmpty { ")" },
             ctrl.subList()?.let(::convertParagraphs).orEmpty(), shape, position)

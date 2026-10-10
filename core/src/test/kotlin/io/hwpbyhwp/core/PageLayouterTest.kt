@@ -146,4 +146,23 @@ class PageLayouterTest {
         val t = PageLayouter(d, mono).layout().single().items.filterIsInstance<TextItem>().single()
         assertTrue(t.xs[2] - t.xs[1] > 0f, "space width must stay positive: ${t.xs.toList()}")
     }
+
+    @Test
+    fun cellTextContinuesOnNextPageWhereLinePositionsRestart() {
+        // A one-cell box whose second paragraph Hangul placed on the next page (vertPos back to 0).
+        val cellParas = listOf(
+            Paragraph(0, listOf(TextRun("first", 0, 0)), lineSegs = listOf(seg(0, 60000)), length = 6),
+            Paragraph(0, listOf(TextRun("second", 0, 0)), lineSegs = listOf(seg(0, 0)), length = 7),
+        )
+        val cell = io.hwpbyhwp.core.model.TableCell(0, 0, 1, 1, 40000, 120000, 0, 0, 0, 0, 0, io.hwpbyhwp.core.model.VertAlign.TOP, cellParas)
+        val table = io.hwpbyhwp.core.model.TableObject(1, 1, 40000, 120000, 0, 0,
+            io.hwpbyhwp.core.model.ObjectPlacement.INLINE.copy(treatAsChar = false), listOf(cell))
+        val anchor = Paragraph(0, listOf(table), lineSegs = listOf(seg(0, 0)), length = 9)
+        val pages = PageLayouter(doc(listOf(anchor)), mono).layout()
+        assertEquals(2, pages.size)
+        assertEquals(listOf("first"), pages[0].items.filterIsInstance<TextItem>().map { it.text })
+        val second = pages[1].items.filterIsInstance<TextItem>().single()
+        assertEquals("second", second.text)
+        assertEquals(bodyTop + 850, second.baseline)
+    }
 }

@@ -10,6 +10,8 @@ import io.hwpbyhwp.core.model.Border
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.EquationObject
 import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.NewPageNumber
+import io.hwpbyhwp.core.model.PageHide
 import io.hwpbyhwp.core.layout.equation.EqLayout
 import io.hwpbyhwp.core.layout.equation.EqParser
 import io.hwpbyhwp.core.model.Note
@@ -79,6 +81,7 @@ class PageLayouter(
         val decorations = Decorations()
         return document.sections.flatMapIndexed { i, section ->
             currentSection = section
+            if (section.pageStartNumber > 0) pageNumber = section.pageStartNumber
             SectionFlow(section.page, decorations).run(section.paragraphs, isLastSection = i == document.sections.lastIndex)
         }
     }
@@ -137,6 +140,19 @@ class PageLayouter(
         private val column get() = columns[columnIndex.coerceAtMost(columns.lastIndex)]
 
         private val pageFootnotes = mutableListOf<Note>()
+        /** 감추기 in effect on the current page. */
+        private var hide: PageHide? = null
+
+        /** Page-scoped controls act on the page where their paragraph starts. */
+        private fun applyPageControls(p: Paragraph) {
+            p.inlines.forEach { inline ->
+                when (inline) {
+                    is NewPageNumber -> pageNumber = inline.number
+                    is PageHide -> hide = inline
+                    else -> Unit
+                }
+            }
+        }
 
         fun run(paragraphs: List<Paragraph>, isLastSection: Boolean): List<Page> {
             paragraphs.forEachIndexed { index, p ->
@@ -179,17 +195,18 @@ class PageLayouter(
             pageHasLines = false
             lastVertPos = null
             columnIndex = 0
+            hide = null
         }
 
         private fun finishPage() {
             val decorated = mutableListOf<PageItem>()
-            decorations.pick(decorations.headers, pageNumber)?.let {
+            decorations.pick(decorations.headers, pageNumber)?.takeIf { hide?.header != true }?.let {
                 layoutFrame(it.paragraphs, bodyLeft, setup.marginTop.toFloat(), bodyWidth, decorated)
             }
-            decorations.pick(decorations.footers, pageNumber)?.let {
+            decorations.pick(decorations.footers, pageNumber)?.takeIf { hide?.footer != true }?.let {
                 layoutFrame(it.paragraphs, bodyLeft, (setup.effectiveHeight - setup.marginBottom - setup.marginFooter).toFloat(), bodyWidth, decorated)
             }
-            decorations.pageNumber?.let { drawPageNumber(it, decorated) }
+            decorations.pageNumber?.takeIf { hide?.pageNumber != true }?.let { drawPageNumber(it, decorated) }
             if (pageFootnotes.isNotEmpty()) {
                 // Footnotes sit at the bottom of the body area; Hangul's stored line positions already
                 // keep the body text clear of them.
@@ -317,6 +334,7 @@ class PageLayouter(
                     if (seg.firstLineOfPage || columnIndex + 1 >= columns.size) newPage() else columnIndex++
                 }
                 lastVertPos = seg.vertPos
+                if (i == 0) applyPageControls(p)
                 if (paraTop == null) { paraTop = bodyTop + seg.vertPos; paraColumn = column }
                 if (chunkTop == null) {
                     chunkStart = items.size
@@ -335,6 +353,7 @@ class PageLayouter(
                 usedBottom = maxOf(usedBottom, (seg.vertPos + seg.height).toFloat())
                 if (p.lineSegs.isNotEmpty()) synthCursor = (seg.vertPos + seg.height + seg.spacing).toFloat()
             }
+            if (segs.isEmpty()) applyPageControls(p)
             flushBorder(isEnd = true)
             // Objects not placed in the text flow are positioned relative to the paragraph or the page.
             val anchorTop = paraTop ?: (bodyTop + usedBottom)
@@ -411,6 +430,13 @@ class PageLayouter(
                     height += grid.rowHeights[rowEnd]
                     rowEnd++
                 }
+                if (rowEnd == rowStart && rowSplitsAcrossPages(table, rowStart)) {
+                    // Hangul broke this row's cells across pages; follow its line positions.
+                    y = placeSplitRow(table, grid, rowStart, x, y, headerRows)
+                    usedBottom = maxOf(usedBottom, y - bodyTop)
+                    rowStart++
+                    continue
+                }
                 if (rowEnd == rowStart) {
                     if (y > bodyTop + PAGE_TOLERANCE) {
                         // Not even one row fits: continue on the next page.
@@ -428,6 +454,61 @@ class PageLayouter(
                     y = bodyTop + repeatHeader(table, grid, headerRows, x, rowStart)
                 }
             }
+        }
+
+        private fun rowSplitsAcrossPages(table: TableObject, row: Int): Boolean =
+            table.cells.any { it.row == row && cellChunks(it).size > 1 }
+
+        /**
+         * Draws a row whose cell text continues on following pages. Hangul restarts the stored line
+         * positions at 0 where a cell continues on a new page, so each run of lines between such
+         * restarts is one page's share. The first share fills the rest of the current page, later
+         * ones start at the body top. Returns the y below the row.
+         */
+        private fun placeSplitRow(table: TableObject, grid: TableGrid, row: Int, x: Float, startY: Float, headerRows: Int): Float {
+            val cells = table.cells.filter { it.row == row }
+            val chunks = cells.associateWith { cellChunks(it) }
+            val parts = chunks.values.maxOf { it.size }
+            var top = startY
+            var bottom = startY
+            for (k in 0 until parts) {
+                val last = k == parts - 1
+                val contentHeight = cells.maxOf { c ->
+                    val lines = chunks.getValue(c).getOrNull(k).orEmpty()
+                    (lines.maxOfOrNull { (p, i) -> p.lineSegs[i].let { it.vertPos + it.height } } ?: 0) + c.marginTop + c.marginBottom
+                }.toFloat()
+                bottom = if (last) top + contentHeight else bodyTop + bodyHeight
+                for (c in cells) {
+                    val cx = x + grid.colX(c.col)
+                    val w = grid.cellWidth(c).toFloat()
+                    val bf = document.borderFill(c.borderFillId)
+                    bf?.fillColor?.let { items += RectItem(cx, top, cx + w, bottom, it) }
+                    val lines = chunks.getValue(c).getOrNull(k).orEmpty()
+                    val innerWidth = w - c.marginLeft - c.marginRight
+                    for ((p, i) in lines) {
+                        val shape = document.paraShape(p.paraShapeId)
+                        val seg = p.lineSegs[i]
+                        val fit = (innerWidth - seg.horzPos - shape.marginRight.coerceAtLeast(0)).toInt()
+                        val sized = if (seg.width <= 0 || seg.width > fit) seg.copy(width = fit) else seg
+                        placeLine(p, shape, sized, isFirst = i == 0, isLast = i == p.lineSegs.lastIndex,
+                            end = p.lineSegs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE,
+                            left = cx + c.marginLeft, top = top + c.marginTop, out = items,
+                            inlineObject = { obj, ox, oy -> placeNested(obj, ox, oy, items) },
+                            head = if (i == 0) headOf(p) else null)
+                    }
+                    if (bf != null) {
+                        border(bf.top, cx, top, cx + w, top, items)
+                        border(bf.bottom, cx, bottom, cx + w, bottom, items)
+                        border(bf.left, cx, top, cx, bottom, items)
+                        border(bf.right, cx + w, top, cx + w, bottom, items)
+                    }
+                }
+                if (!last) {
+                    newPage()
+                    top = bodyTop + repeatHeader(table, grid, headerRows, x, row)
+                }
+            }
+            return bottom
         }
 
         private fun repeatHeader(table: TableObject, grid: TableGrid, headerRows: Int, x: Float, nextRow: Int): Float {
@@ -810,6 +891,23 @@ class PageLayouter(
             border(bf.left, cx, cy, cx, cy + h, out)
             border(bf.right, cx + w, cy, cx + w, cy + h, out)
         }
+    }
+
+    /**
+     * A cell's lines grouped by page: a stored vertical position lower than the previous line's
+     * marks where Hangul continued the cell on the next page. Each entry is (paragraph, line index).
+     */
+    private fun cellChunks(cell: TableCell): List<List<Pair<Paragraph, Int>>> {
+        val chunks = mutableListOf(mutableListOf<Pair<Paragraph, Int>>())
+        var prev: Int? = null
+        for (p in cell.paragraphs) {
+            p.lineSegs.forEachIndexed { i, seg ->
+                if (prev != null && seg.vertPos < prev!! - PAGE_TOLERANCE) chunks += mutableListOf<Pair<Paragraph, Int>>()
+                chunks.last() += p to i
+                prev = seg.vertPos
+            }
+        }
+        return chunks.filter { it.isNotEmpty() }
     }
 
     /**

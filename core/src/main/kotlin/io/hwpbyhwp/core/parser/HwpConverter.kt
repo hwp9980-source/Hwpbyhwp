@@ -19,6 +19,8 @@ import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.EquationObject
 import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.NewPageNumber
+import io.hwpbyhwp.core.model.PageHide
 import io.hwpbyhwp.core.model.Note
 import io.hwpbyhwp.core.model.NoteKind
 import io.hwpbyhwp.core.model.HeaderFooterKind
@@ -60,6 +62,8 @@ import kr.dogfoot.hwplib.`object`.bodytext.control.ControlEquation
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlFootnote
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlFooter
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlHeader
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlNewNumber
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlPageHide
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlPageNumberPosition
 import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.autonumber.NumberSort
 import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.header.HeaderFooterApplyPage
@@ -135,7 +139,9 @@ internal class HwpConverter(private val hwp: HWPFile) {
             paragraphs.firstOrNull()?.controlList.orEmpty()
                 .filterIsInstance<ControlSectionDefine>().firstOrNull()
                 ?.let { outline = it.header.numberParaShapeId.coerceAtLeast(1) }
-            Section(page, paragraphs.map(::convertParagraph), outline)
+            val pageStart = paragraphs.firstOrNull()?.controlList.orEmpty()
+                .filterIsInstance<ControlSectionDefine>().firstOrNull()?.header?.pageStartNumber ?: 0
+            Section(page, paragraphs.map(::convertParagraph), outline, pageStart)
         }
         return Document(
             sections = sections,
@@ -322,12 +328,21 @@ internal class HwpConverter(private val hwp: HWPFile) {
             control.paragraphList.paragraphs.orEmpty().map(::convertParagraph), position,
         )
         control is ControlPageNumberPosition -> control.header.let { h ->
+            val before = h.beforeDecorationLetter?.toUTF16LEString().orEmpty().trim('\u0000')
+            val after = h.afterDecorationLetter?.toUTF16LEString().orEmpty().trim('\u0000')
             PageNumberPosition(
                 place = PageNumberPlace.entries.getOrNull(h.property.numberPosition.ordinal) ?: PageNumberPlace.NONE,
-                prefix = h.beforeDecorationLetter?.toUTF16LEString().orEmpty().trim('\u0000'),
-                suffix = h.afterDecorationLetter?.toUTF16LEString().orEmpty().trim('\u0000'),
+                prefix = before,
+                // The record ends with a field that is always '-'; alone (no leading decoration) it
+                // is not a decoration Hangul prints.
+                suffix = if (before.isEmpty() && after == "-") "" else after,
                 start = position,
             )
+        }
+        control is ControlNewNumber -> control.header.takeIf { it.property.numberSort == NumberSort.Page }
+            ?.let { NewPageNumber(it.number, position) }
+        control is ControlPageHide -> control.header.property.let {
+            PageHide(it.isHideHeader, it.isHideFooter, it.isHidePageNumber, it.isHideBorder, it.isHideFill, position)
         }
         control is ControlAutoNumber -> AutoNumber(
             when (control.header.property.numberSort) {
