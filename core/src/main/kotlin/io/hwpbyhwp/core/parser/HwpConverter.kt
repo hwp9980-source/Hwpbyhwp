@@ -18,6 +18,8 @@ import io.hwpbyhwp.core.model.NumberingDef
 import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.Note
+import io.hwpbyhwp.core.model.NoteKind
 import io.hwpbyhwp.core.model.HeaderFooterKind
 import io.hwpbyhwp.core.model.PageNumberPlace
 import io.hwpbyhwp.core.model.PageNumberPosition
@@ -49,6 +51,8 @@ import kr.dogfoot.hwplib.`object`.HWPFile
 import kr.dogfoot.hwplib.`object`.bodytext.control.Control
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlAutoNumber
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlColumnDefine
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlEndnote
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlFootnote
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlFooter
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlHeader
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlPageNumberPosition
@@ -279,8 +283,23 @@ internal class HwpConverter(private val hwp: HWPFile) {
             )
         }
         control is ControlAutoNumber -> AutoNumber(
-            if (control.header.property.numberSort == NumberSort.Page) AutoNumberKind.PAGE else AutoNumberKind.OTHER,
+            when (control.header.property.numberSort) {
+                NumberSort.Page -> AutoNumberKind.PAGE
+                NumberSort.FootNote -> AutoNumberKind.FOOTNOTE
+                NumberSort.EndNote -> AutoNumberKind.ENDNOTE
+                else -> AutoNumberKind.OTHER
+            },
             charShape, position,
+        )
+        control is ControlFootnote -> Note(
+            NoteKind.FOOTNOTE, control.header.number.toInt(),
+            control.header.afterDecorationLetter?.toUTF16LEString().orEmpty().trimEnd('\u0000').ifEmpty { ")" },
+            control.paragraphList.paragraphs.orEmpty().map(::convertParagraph), charShape, position,
+        )
+        control is ControlEndnote -> Note(
+            NoteKind.ENDNOTE, control.header.number.toInt(),
+            control.header.afterDecorationLetter?.toUTF16LEString().orEmpty().trimEnd('\u0000').ifEmpty { ")" },
+            control.paragraphList.paragraphs.orEmpty().map(::convertParagraph), charShape, position,
         )
         control.type == ControlType.Table -> convertTable(control as ControlTable).copy(start = position)
         control is GsoControl && control.gsoType == GsoControlType.Picture ->

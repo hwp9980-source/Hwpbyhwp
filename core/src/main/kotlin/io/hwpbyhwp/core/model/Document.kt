@@ -38,6 +38,7 @@ data class Document(
                 }
                 is AutoNumber -> if (inline.kind == AutoNumberKind.PAGE) append('#')
                 is ShapeObject -> inline.text?.paragraphs?.forEach { appendParagraph(it) }
+                is Note -> append(inline.label)
                 is PictureObject, is ColumnDefine, is HeaderFooter, is PageNumberPosition -> Unit
             }
         }
@@ -175,7 +176,22 @@ data class PageNumberPosition(
     override val start: Int = 0,
 ) : Inline
 
-enum class AutoNumberKind { PAGE, TOTAL_PAGES, OTHER }
+enum class AutoNumberKind { PAGE, TOTAL_PAGES, FOOTNOTE, ENDNOTE, OTHER }
+
+enum class NoteKind { FOOTNOTE, ENDNOTE }
+
+/** 각주/미주: a reference mark in the text plus note paragraphs printed at the page or document end. */
+data class Note(
+    val kind: NoteKind,
+    val number: Int,
+    /** Printed after the number, ")" by default. */
+    val suffix: String,
+    val paragraphs: List<Paragraph>,
+    val charShapeId: Int,
+    override val start: Int = 0,
+) : Inline {
+    val label: String get() = "$number$suffix"
+}
 
 /** A number filled in at layout time, e.g. the page number inside a footer. */
 data class AutoNumber(

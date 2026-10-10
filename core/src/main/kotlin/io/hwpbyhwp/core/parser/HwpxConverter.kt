@@ -18,6 +18,8 @@ import io.hwpbyhwp.core.model.NumberingDef
 import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.Note
+import io.hwpbyhwp.core.model.NoteKind
 import io.hwpbyhwp.core.model.HeaderFooterKind
 import io.hwpbyhwp.core.model.PageNumberPlace
 import io.hwpbyhwp.core.model.PageNumberPosition
@@ -70,6 +72,8 @@ import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.Ctrl
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.CtrlItem
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.AutoNum
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.ColPr
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.EndNote
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.FootNote
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.Footer
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.Header
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.PageNum
@@ -243,10 +247,16 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             when (ctrl.numType()) {
                 NumType.PAGE -> AutoNumberKind.PAGE
                 NumType.TOTAL_PAGE -> AutoNumberKind.TOTAL_PAGES
+                NumType.FOOTNOTE -> AutoNumberKind.FOOTNOTE
+                NumType.ENDNOTE -> AutoNumberKind.ENDNOTE
                 else -> AutoNumberKind.OTHER
             },
             shape, position,
         )
+        is FootNote -> Note(NoteKind.FOOTNOTE, ctrl.number() ?: 0, ctrl.suffixChar().orEmpty().ifEmpty { ")" },
+            ctrl.subList()?.let(::convertParagraphs).orEmpty(), shape, position)
+        is EndNote -> Note(NoteKind.ENDNOTE, ctrl.number() ?: 0, ctrl.suffixChar().orEmpty().ifEmpty { ")" },
+            ctrl.subList()?.let(::convertParagraphs).orEmpty(), shape, position)
         else -> null
     }
 

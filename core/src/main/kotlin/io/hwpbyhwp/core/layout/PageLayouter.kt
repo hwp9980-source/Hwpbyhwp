@@ -9,6 +9,8 @@ import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.Note
+import io.hwpbyhwp.core.model.NoteKind
 import io.hwpbyhwp.core.model.HeaderFooterKind
 import io.hwpbyhwp.core.model.PageNumberPlace
 import io.hwpbyhwp.core.model.PageNumberPosition
@@ -53,6 +55,9 @@ class PageLayouter(
     /** Total page count, known on the second pass when the document prints it. */
     private var totalPages = 0
     private var heads = ParagraphHeads(document)
+    /** Note whose text is being laid out; its number fills footnote/endnote number fields. */
+    private var currentNote: Note? = null
+    private val endnotes = mutableListOf<Note>()
     /** Section whose paragraphs are being laid out; outline numbering depends on it. */
     private var currentSection: Section? = null
 
@@ -66,8 +71,12 @@ class PageLayouter(
     private fun runAll(): List<Page> {
         pageNumber = 1
         heads = ParagraphHeads(document)
+        endnotes.clear()
         val decorations = Decorations()
-        return document.sections.flatMap { currentSection = it; SectionFlow(it.page, decorations).run(it.paragraphs) }
+        return document.sections.flatMapIndexed { i, section ->
+            currentSection = section
+            SectionFlow(section.page, decorations).run(section.paragraphs, isLastSection = i == document.sections.lastIndex)
+        }
     }
 
     private fun usesTotalPages(): Boolean {
@@ -123,7 +132,9 @@ class PageLayouter(
         private var columnIndex = 0
         private val column get() = columns[columnIndex.coerceAtMost(columns.lastIndex)]
 
-        fun run(paragraphs: List<Paragraph>): List<Page> {
+        private val pageFootnotes = mutableListOf<Note>()
+
+        fun run(paragraphs: List<Paragraph>, isLastSection: Boolean): List<Page> {
             paragraphs.forEachIndexed { index, p ->
                 p.inlines.forEach { inline ->
                     decorations.register(inline)
@@ -133,6 +144,7 @@ class PageLayouter(
                 val segs = p.lineSegs.ifEmpty { synthesize(p) }
                 placeParagraph(p, segs, connectsTo(p, paragraphs.getOrNull(index - 1)), connectsTo(p, paragraphs.getOrNull(index + 1)))
             }
+            if (isLastSection) placeEndnotes()
             finishPage()
             return pages
         }
@@ -174,8 +186,48 @@ class PageLayouter(
                 layoutFrame(it.paragraphs, bodyLeft, (setup.effectiveHeight - setup.marginBottom - setup.marginFooter).toFloat(), bodyWidth, decorated)
             }
             decorations.pageNumber?.let { drawPageNumber(it, decorated) }
+            if (pageFootnotes.isNotEmpty()) {
+                // Footnotes sit at the bottom of the body area; Hangul's stored line positions already
+                // keep the body text clear of them.
+                val height = notesHeight(pageFootnotes)
+                placeNotes(pageFootnotes, bodyTop + bodyHeight - height, items)
+                pageFootnotes.clear()
+            }
             pages += Page(setup.effectiveWidth, setup.effectiveHeight, decorated + items)
             pageNumber++
+        }
+
+        private fun notesHeight(notes: List<Note>): Float =
+            NOTE_SEPARATOR_SPACE + notes.sumOf { noteHeight(it).toDouble() }.toFloat() + NOTE_GAP * (notes.size - 1)
+
+        private fun noteHeight(note: Note): Float =
+            frameSegments(note.paragraphs, bodyWidth).flatMap { it.second }.maxOfOrNull { (it.vertPos + it.height).toFloat() } ?: 0f
+
+        /** Separator line, then each note's paragraphs, starting at [top]. */
+        private fun placeNotes(notes: List<Note>, top: Float, out: MutableList<PageItem>) {
+            out += LineItem(bodyLeft, top + NOTE_SEPARATOR_SPACE / 2, bodyLeft + bodyWidth / 3, top + NOTE_SEPARATOR_SPACE / 2, 34f, CharShape.BLACK, BorderStyle.SOLID)
+            var y = top + NOTE_SEPARATOR_SPACE
+            for (note in notes) {
+                currentNote = note
+                // Notes normally start with a number field; print the label ourselves when one is missing.
+                val hasNumber = note.paragraphs.firstOrNull()?.inlines?.any { it is AutoNumber } == true
+                val head = if (hasNumber) null else ParagraphHeads.Head(note.label, note.charShapeId)
+                layoutFrame(note.paragraphs, bodyLeft, y, bodyWidth, out, head)
+                y += noteHeight(note) + NOTE_GAP
+                currentNote = null
+            }
+        }
+
+        /** Endnotes follow the last paragraph of the document, on a new page if they do not fit. */
+        private fun placeEndnotes() {
+            if (endnotes.isEmpty()) return
+            var top = bodyTop + usedBottom + NOTE_GAP
+            if (top + notesHeight(endnotes) > bodyTop + bodyHeight && hasContent()) {
+                newPage()
+                top = bodyTop
+            }
+            placeNotes(endnotes.toList(), top, items)
+            endnotes.clear()
         }
 
         private fun drawPageNumber(pos: PageNumberPosition, out: MutableList<PageItem>) {
@@ -270,6 +322,9 @@ class PageLayouter(
                 placeLine(p, shape, seg, isFirst = i == 0, isLast = i == segs.lastIndex, end = end,
                     left = bodyLeft + column.x, top = bodyTop, out = items, inlineObject = ::placeInlineObjectOnPage,
                     head = head.takeIf { i == 0 })
+                p.inlines.filterIsInstance<Note>().filter { it.start in seg.textStart until end }.forEach {
+                    if (it.kind == NoteKind.FOOTNOTE) pageFootnotes += it else endnotes += it
+                }
                 chunkBottom = bodyTop + seg.vertPos + seg.height +
                     (if (i == segs.lastIndex && connectNext) seg.spacing + shape.spaceAfter else 0)
                 pageHasLines = true
@@ -421,11 +476,18 @@ class PageLayouter(
                     val text = when (inline.kind) {
                         AutoNumberKind.PAGE -> pageNumber.toString()
                         AutoNumberKind.TOTAL_PAGES -> totalPages.takeIf { it > 0 }?.toString() ?: "#"
+                        AutoNumberKind.FOOTNOTE, AutoNumberKind.ENDNOTE -> currentNote?.label.orEmpty()
                         AutoNumberKind.OTHER -> ""
                     }
                     val shape = document.charShape(inline.charShapeId)
                     val widths = measure(text, shape)
                     text.forEachIndexed { i, c -> atoms += Atom(inline.start, c, shape, scriptOf(c), widths[i]) }
+                }
+                is Note -> if (inline.start in from until to) {
+                    // The reference mark: the note number as superscript.
+                    val shape = document.charShape(inline.charShapeId).copy(superscript = true)
+                    val widths = measure(inline.label, shape)
+                    inline.label.forEachIndexed { i, c -> atoms += Atom(inline.start, c, shape, scriptOf(c), widths[i]) }
                 }
                 else -> Unit
             }
@@ -699,8 +761,10 @@ class PageLayouter(
     }
 
     /** Lays [paragraphs] into a box without pagination (cells, headers, footers). */
-    private fun layoutFrame(paragraphs: List<Paragraph>, left: Float, top: Float, width: Float, out: MutableList<PageItem>) =
-        placeFrame(frameSegments(paragraphs, width), left, top, width, out)
+    private fun layoutFrame(
+        paragraphs: List<Paragraph>, left: Float, top: Float, width: Float, out: MutableList<PageItem>,
+        firstHead: ParagraphHeads.Head? = null,
+    ) = placeFrame(frameSegments(paragraphs, width), left, top, width, out, firstHead)
 
     /** Stored segments of each paragraph, or computed ones stacked from the frame top. */
     private fun frameSegments(paragraphs: List<Paragraph>, width: Float): List<Pair<Paragraph, List<LineSeg>>> {
@@ -718,10 +782,14 @@ class PageLayouter(
         }
     }
 
-    private fun placeFrame(frame: List<Pair<Paragraph, List<LineSeg>>>, left: Float, top: Float, width: Float, out: MutableList<PageItem>) {
-        for ((p, segs) in frame) {
+    private fun placeFrame(
+        frame: List<Pair<Paragraph, List<LineSeg>>>, left: Float, top: Float, width: Float, out: MutableList<PageItem>,
+        firstHead: ParagraphHeads.Head? = null,
+    ) {
+        for ((index, entry) in frame.withIndex()) {
+            val (p, segs) = entry
             val shape = document.paraShape(p.paraShapeId)
-            val head = headOf(p)
+            val head = if (index == 0 && firstHead != null) firstHead else headOf(p)
             segs.forEachIndexed { i, seg ->
                 val s = if (seg.width <= 0) seg.copy(width = (width - seg.horzPos - shape.marginRight).toInt()) else seg
                 placeLine(p, shape, s, isFirst = i == 0, isLast = i == segs.lastIndex, end = segs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE,
@@ -839,5 +907,8 @@ class PageLayouter(
         /** Slack when comparing stored vertical positions, in HWPUNIT. */
         const val PAGE_TOLERANCE = 50f
         const val OBJECT_CHAR = '\uFFFC'
+        /** Room above notes for the separator line, and space between notes (HWPUNIT). */
+        const val NOTE_SEPARATOR_SPACE = 850f
+        const val NOTE_GAP = 280f
     }
 }
