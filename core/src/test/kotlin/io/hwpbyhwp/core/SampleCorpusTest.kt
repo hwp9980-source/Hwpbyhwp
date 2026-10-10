@@ -3,7 +3,13 @@ package io.hwpbyhwp.core
 import io.hwpbyhwp.core.model.Paragraph
 import io.hwpbyhwp.core.model.TableObject
 import io.hwpbyhwp.core.model.TextRun
+import io.hwpbyhwp.core.layout.ParagraphHeads
+import io.hwpbyhwp.core.model.HeadType
 import io.hwpbyhwp.core.parser.DocumentLoader
+import kr.dogfoot.hwplib.reader.HWPReader
+import kr.dogfoot.hwplib.tool.textextractor.TextExtractMethod
+import kr.dogfoot.hwplib.tool.textextractor.TextExtractOption
+import kr.dogfoot.hwplib.tool.textextractor.TextExtractor
 import java.io.File
 import kotlin.math.abs
 import kotlin.test.Test
@@ -58,5 +64,34 @@ class SampleCorpusTest {
         }
         println("line segments checked: $checked, mismatched: ${mismatches.size}")
         if (mismatches.isNotEmpty()) fail(mismatches.distinct().take(20).joinToString("\n"))
+    }
+
+    /** Compares our paragraph-head labels with hwplib's own (TextExtractOption.insertParaHead) on HWP files. */
+    @Test
+    fun paragraphHeadsMatchHwplib() {
+        val mismatches = mutableListOf<String>()
+        var checked = 0
+        for (f in files.filter { it.extension.lowercase() == "hwp" && it.length() < 3_000_000 }) {
+            val hwp = runCatching { HWPReader.fromFile(f) }.getOrNull() ?: continue
+            val option = TextExtractOption(TextExtractMethod.OnlyMainParagraph).apply { isInsertParaHead = true; isAppendEndingLF = true }
+            val withHeads = runCatching { TextExtractor.extract(hwp, option) }.getOrNull() ?: continue
+            val expectedLines = withHeads.split("\n")
+            val doc = DocumentLoader.load(f)
+            val heads = ParagraphHeads(doc)
+            var line = 0
+            for (section in doc.sections) for (p in section.paragraphs) {
+                val label = heads.label(p, section)?.text
+                val text = p.inlines.filterIsInstance<TextRun>().joinToString("") { it.text }
+                val expected = expectedLines.getOrNull(line) ?: break
+                line += 1 + p.inlines.count { it is io.hwpbyhwp.core.model.LineBreak }
+                // hwplib does not number outline paragraphs; it prints bullets as raw Wingdings code points.
+                if (label == null || text.isEmpty() || doc.paraShape(p.paraShapeId).headType == HeadType.OUTLINE) continue
+                checked++
+                val normalized = expected.firstOrNull()?.let { ParagraphHeads.bulletGlyph(it.toString()) + expected.drop(1) } ?: expected
+                if (!expected.startsWith(label) && !normalized.startsWith(label)) mismatches += "${f.name}: expected '${expected.take(30)}' label '$label'"
+            }
+        }
+        println("paragraph heads checked: $checked, mismatched: ${mismatches.size}")
+        if (mismatches.isNotEmpty()) fail(mismatches.take(20).joinToString("\n"))
     }
 }

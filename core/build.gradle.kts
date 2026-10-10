@@ -20,6 +20,8 @@ dependencies {
     implementation("kr.dogfoot:hwpxlib:1.0.9")
 
     testImplementation(kotlin("test"))
+    // The corpus test uses hwplib's own text extractor as a reference.
+    testImplementation("kr.dogfoot:hwplib:1.1.11")
 }
 
 tasks.test {

@@ -11,6 +11,11 @@ import io.hwpbyhwp.core.model.TextBox
 import io.hwpbyhwp.core.model.AutoNumber
 import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
+import io.hwpbyhwp.core.model.BulletDef
+import io.hwpbyhwp.core.model.HeadType
+import io.hwpbyhwp.core.model.NumberShape
+import io.hwpbyhwp.core.model.NumberingDef
+import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.HeaderFooter
 import io.hwpbyhwp.core.model.HeaderFooterKind
@@ -113,11 +118,14 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
 
     fun convert(): Document {
         var page = PageSetup.A4
+        var outline = 1
         val sections = hwpx.sectionXMLFileList().items().map { section ->
             // The first run of the first paragraph carries the section properties.
             section.paras().firstOrNull()?.runs()?.firstNotNullOfOrNull { it.secPr()?.pagePr() }
                 ?.let { page = it.toPageSetup() }
-            Section(page, convertParagraphs(section))
+            section.paras().firstOrNull()?.runs()?.firstNotNullOfOrNull { it.secPr()?.outlineShapeIDRef()?.toIntOrNull() }
+                ?.let { outline = it }
+            Section(page, convertParagraphs(section), outline)
         }
         return Document(
             sections = sections,
@@ -125,7 +133,41 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             paraShapes = refList?.paraProperties().byId { it.id() }.mapValues { (_, v) -> v.toModel() },
             borderFills = refList?.borderFills().byId { it.id() }.mapValues { (_, v) -> v.toModel() },
             binaries = loadBinaries(),
+            numberings = refList?.numberings().byId { it.id() }.mapValues { (_, n) ->
+                NumberingDef(
+                    levels = n.paraHeads().sortedBy { it.level() ?: 0 }.map { h ->
+                        NumberingLevel(
+                            format = h.text().orEmpty(),
+                            shape = h.numFormat()?.name.toShape(),
+                            start = h.start() ?: 1,
+                            charShapeId = h.charPrIDRef()?.toLongOrNull()?.takeIf { it in 0 until 0xFFFFFFFFL }?.toInt(),
+                        )
+                    },
+                    start = n.start() ?: 1,
+                )
+            },
+            bullets = refList?.bullets().byId { it.id() }.mapValues { (_, b) ->
+                BulletDef(b._char().orEmpty(), b.paraHead()?.charPrIDRef()?.toLongOrNull()?.takeIf { it in 0 until 0xFFFFFFFFL }?.toInt())
+            },
         )
+    }
+
+    private fun String?.toShape(): NumberShape = when (this) {
+        "CIRCLED_DIGIT" -> NumberShape.CIRCLED_DIGIT
+        "ROMAN_CAPITAL" -> NumberShape.ROMAN_UPPER
+        "ROMAN_SMALL" -> NumberShape.ROMAN_LOWER
+        "LATIN_CAPITAL" -> NumberShape.LATIN_UPPER
+        "LATIN_SMALL" -> NumberShape.LATIN_LOWER
+        "CIRCLED_LATIN_CAPTION" -> NumberShape.CIRCLED_LATIN_UPPER
+        "CIRCLED_LATIN_SMALL" -> NumberShape.CIRCLED_LATIN_LOWER
+        "HANGUL_SYLLABLE" -> NumberShape.HANGUL_SYLLABLE
+        "CIRCLED_HANGUL_SYLLABLE" -> NumberShape.CIRCLED_HANGUL_SYLLABLE
+        "HANGUL_JAMO" -> NumberShape.HANGUL_JAMO
+        "CIRCLED_HANGUL_JAMO" -> NumberShape.CIRCLED_HANGUL_JAMO
+        "HANGUL_PHONETIC" -> NumberShape.HANGUL_NUMBER
+        "IDEOGRAPH" -> NumberShape.HANJA_NUMBER
+        "CIRCLED_IDEOGRAPH" -> NumberShape.CIRCLED_HANJA_NUMBER
+        else -> NumberShape.DIGIT
     }
 
     private fun loadBinaries(): Map<String, ByteArray> =
@@ -489,6 +531,14 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             borderIgnoreMargin = border()?.ignoreMargin() == true,
             keepWithNext = breakSetting()?.keepWithNext() == true,
             pageBreakBefore = breakSetting()?.pageBreakBefore() == true,
+            headType = when (heading()?.type()?.name) {
+                "OUTLINE" -> HeadType.OUTLINE
+                "NUMBER" -> HeadType.NUMBER
+                "BULLET" -> HeadType.BULLET
+                else -> HeadType.NONE
+            },
+            headId = heading()?.idRef().toIntId(),
+            level = heading()?.level()?.toInt() ?: 0,
         )
     }
 

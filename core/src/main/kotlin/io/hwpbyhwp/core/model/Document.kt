@@ -14,6 +14,8 @@ data class Document(
     val borderFills: Map<Int, BorderFill>,
     /** Embedded binary data (mostly images), keyed by [Picture.binId]. */
     val binaries: Map<String, ByteArray>,
+    val numberings: Map<Int, NumberingDef> = emptyMap(),
+    val bullets: Map<Int, BulletDef> = emptyMap(),
 ) {
     fun charShape(id: Int): CharShape = charShapes[id] ?: CharShape.DEFAULT
     fun paraShape(id: Int): ParaShape = paraShapes[id] ?: ParaShape.DEFAULT
@@ -46,7 +48,30 @@ data class Document(
 data class Section(
     val page: PageSetup,
     val paragraphs: List<Paragraph>,
+    /** Numbering used by outline-level paragraphs (개요 번호) in this section. */
+    val outlineNumberingId: Int = 1,
 )
+
+/** 문단 번호 / 개요 번호 definition: one entry per level. */
+data class NumberingDef(val levels: List<NumberingLevel>, val start: Int = 1)
+
+data class NumberingLevel(
+    /** Label template; ^1 … ^10 stand for the counters of those levels, e.g. "^1." or "(^2)". */
+    val format: String,
+    val shape: NumberShape,
+    val start: Int = 1,
+    /** Char shape of the label, or null to use the paragraph's first character's. */
+    val charShapeId: Int? = null,
+)
+
+data class BulletDef(val char: String, val charShapeId: Int? = null)
+
+enum class HeadType { NONE, OUTLINE, NUMBER, BULLET }
+
+enum class NumberShape {
+    DIGIT, CIRCLED_DIGIT, ROMAN_UPPER, ROMAN_LOWER, LATIN_UPPER, LATIN_LOWER, CIRCLED_LATIN_UPPER, CIRCLED_LATIN_LOWER,
+    HANGUL_SYLLABLE, CIRCLED_HANGUL_SYLLABLE, HANGUL_JAMO, CIRCLED_HANGUL_JAMO, HANGUL_NUMBER, HANJA_NUMBER, CIRCLED_HANJA_NUMBER,
+}
 
 data class PageSetup(
     val width: Int,
@@ -352,6 +377,12 @@ data class ParaShape(
     val borderIgnoreMargin: Boolean = false,
     val keepWithNext: Boolean = false,
     val pageBreakBefore: Boolean = false,
+    /** Paragraph head (문단 머리): outline number, numbering or bullet. */
+    val headType: HeadType = HeadType.NONE,
+    /** Numbering or bullet id for [HeadType.NUMBER] / [HeadType.BULLET]. */
+    val headId: Int = 0,
+    /** Zero-based level (수준) for outline and numbering. */
+    val level: Int = 0,
 ) {
     companion object {
         val DEFAULT = ParaShape()

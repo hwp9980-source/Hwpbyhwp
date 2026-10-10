@@ -11,6 +11,11 @@ import io.hwpbyhwp.core.model.TextBox
 import io.hwpbyhwp.core.model.AutoNumber
 import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
+import io.hwpbyhwp.core.model.BulletDef
+import io.hwpbyhwp.core.model.HeadType
+import io.hwpbyhwp.core.model.NumberShape
+import io.hwpbyhwp.core.model.NumberingDef
+import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
 import io.hwpbyhwp.core.model.HeaderFooter
 import io.hwpbyhwp.core.model.HeaderFooterKind
@@ -83,6 +88,8 @@ import kr.dogfoot.hwplib.`object`.docinfo.borderfill.BorderType
 import kr.dogfoot.hwplib.`object`.docinfo.borderfill.EachBorder
 import kr.dogfoot.hwplib.`object`.docinfo.charshape.UnderLineSort
 import kr.dogfoot.hwplib.`object`.docinfo.parashape.Alignment
+import kr.dogfoot.hwplib.`object`.docinfo.parashape.ParaHeadShape
+import kr.dogfoot.hwplib.`object`.docinfo.numbering.ParagraphNumberFormat
 import kr.dogfoot.hwplib.`object`.docinfo.parashape.LineSpaceSort
 import kr.dogfoot.hwplib.`object`.etc.Color4Byte
 import kr.dogfoot.hwplib.`object`.docinfo.CharShape as HwpCharShape
@@ -107,13 +114,17 @@ internal class HwpConverter(private val hwp: HWPFile) {
     fun convert(): Document {
         loadBinaries()
         var page = PageSetup.A4
+        var outline = 1
         val sections = hwp.bodyText.sectionList.map { section ->
             val paragraphs = section.paragraphs.orEmpty().toList()
             // The section definition lives in the first paragraph; it carries over to later sections that lack one.
             paragraphs.firstOrNull()?.controlList.orEmpty()
                 .filterIsInstance<ControlSectionDefine>().firstOrNull()
                 ?.let { page = it.pageDef.toPageSetup() }
-            Section(page, paragraphs.map(::convertParagraph))
+            paragraphs.firstOrNull()?.controlList.orEmpty()
+                .filterIsInstance<ControlSectionDefine>().firstOrNull()
+                ?.let { outline = it.header.numberParaShapeId.coerceAtLeast(1) }
+            Section(page, paragraphs.map(::convertParagraph), outline)
         }
         return Document(
             sections = sections,
@@ -122,7 +133,43 @@ internal class HwpConverter(private val hwp: HWPFile) {
             // Border/fill ids are 1-based in HWP.
             borderFills = docInfo.borderFillList.withIndex().associate { (i, bf) -> i + 1 to bf.toModel() },
             binaries = binaries,
+            numberings = docInfo.numberingList.withIndex().associate { (i, n) ->
+                i + 1 to NumberingDef(
+                    levels = n.levelNumberingList.map { lv ->
+                        NumberingLevel(
+                            format = lv.numberFormat?.toUTF16LEString().orEmpty().trimEnd('\u0000'),
+                            shape = lv.paragraphHeadInfo.property.paragraphNumberFormat.toShape(),
+                            start = lv.startNumber.toInt().takeIf { it > 0 } ?: n.startNumber.coerceAtLeast(1),
+                            charShapeId = lv.paragraphHeadInfo.charShapeID.toCharShapeRef(),
+                        )
+                    },
+                    start = n.startNumber,
+                )
+            },
+            bullets = docInfo.bulletList.withIndex().associate { (i, b) ->
+                i + 1 to BulletDef(b.bulletChar?.toUTF16LEString().orEmpty().trimEnd('\u0000'), b.paragraphHeadInfo.charShapeID.toCharShapeRef())
+            },
         )
+    }
+
+    private fun Long.toCharShapeRef(): Int? = takeIf { it in 0 until 0xFFFFFFFFL }?.toInt()
+
+    private fun ParagraphNumberFormat?.toShape(): NumberShape = when (this) {
+        ParagraphNumberFormat.CircledNumber -> NumberShape.CIRCLED_DIGIT
+        ParagraphNumberFormat.UppercaseRomanNumber -> NumberShape.ROMAN_UPPER
+        ParagraphNumberFormat.LowercaseRomanNumber -> NumberShape.ROMAN_LOWER
+        ParagraphNumberFormat.UppercaseAlphabet -> NumberShape.LATIN_UPPER
+        ParagraphNumberFormat.LowercaseAlphabet -> NumberShape.LATIN_LOWER
+        ParagraphNumberFormat.CircledUppercaseAlphabet -> NumberShape.CIRCLED_LATIN_UPPER
+        ParagraphNumberFormat.CircledLowercaseAlphabet -> NumberShape.CIRCLED_LATIN_LOWER
+        ParagraphNumberFormat.Hangul -> NumberShape.HANGUL_SYLLABLE
+        ParagraphNumberFormat.CircledHangul -> NumberShape.CIRCLED_HANGUL_SYLLABLE
+        ParagraphNumberFormat.HangulJamo -> NumberShape.HANGUL_JAMO
+        ParagraphNumberFormat.CircledHangulJamo -> NumberShape.CIRCLED_HANGUL_JAMO
+        ParagraphNumberFormat.HangulNumber -> NumberShape.HANGUL_NUMBER
+        ParagraphNumberFormat.HanjaNumber -> NumberShape.HANJA_NUMBER
+        ParagraphNumberFormat.CircledHanjaNumber -> NumberShape.CIRCLED_HANJA_NUMBER
+        else -> NumberShape.DIGIT
     }
 
     private fun loadBinaries() {
@@ -471,6 +518,14 @@ internal class HwpConverter(private val hwp: HWPFile) {
             borderConnect = prop.isLinkBorder,
             borderIgnoreMargin = prop.isIgnoreParaMargin,
             keepWithNext = prop.isTogetherNextPara,
+            headType = when (prop.paraHeadShape) {
+                ParaHeadShape.Outline -> HeadType.OUTLINE
+                ParaHeadShape.Numbering -> HeadType.NUMBER
+                ParaHeadShape.Bullet -> HeadType.BULLET
+                else -> HeadType.NONE
+            },
+            headId = paraHeadId,
+            level = prop.paraLevel.toInt(),
             pageBreakBefore = prop.isSplitPageBeforePara,
         )
     }

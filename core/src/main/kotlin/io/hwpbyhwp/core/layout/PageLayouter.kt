@@ -27,6 +27,7 @@ import io.hwpbyhwp.core.model.Paragraph
 import io.hwpbyhwp.core.model.PictureObject
 import io.hwpbyhwp.core.model.RelTo
 import io.hwpbyhwp.core.model.Script
+import io.hwpbyhwp.core.model.Section
 import io.hwpbyhwp.core.model.Tab
 import io.hwpbyhwp.core.model.TableCell
 import io.hwpbyhwp.core.model.TableObject
@@ -51,6 +52,9 @@ class PageLayouter(
     private var pageNumber = 1
     /** Total page count, known on the second pass when the document prints it. */
     private var totalPages = 0
+    private var heads = ParagraphHeads(document)
+    /** Section whose paragraphs are being laid out; outline numbering depends on it. */
+    private var currentSection: Section? = null
 
     fun layout(): List<Page> {
         val first = runAll()
@@ -61,8 +65,9 @@ class PageLayouter(
 
     private fun runAll(): List<Page> {
         pageNumber = 1
+        heads = ParagraphHeads(document)
         val decorations = Decorations()
-        return document.sections.flatMap { SectionFlow(it.page, decorations).run(it.paragraphs) }
+        return document.sections.flatMap { currentSection = it; SectionFlow(it.page, decorations).run(it.paragraphs) }
     }
 
     private fun usesTotalPages(): Boolean {
@@ -231,6 +236,7 @@ class PageLayouter(
 
         private fun placeParagraph(p: Paragraph, segs: List<LineSeg>, connectPrev: Boolean, connectNext: Boolean) {
             val shape = document.paraShape(p.paraShapeId)
+            val head = headOf(p)
             var paraTop: Float? = null
             var paraColumn = column
             // The part of the paragraph on the current page/column, for its border and background.
@@ -262,7 +268,8 @@ class PageLayouter(
                 }
                 val end = segs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE
                 placeLine(p, shape, seg, isFirst = i == 0, isLast = i == segs.lastIndex, end = end,
-                    left = bodyLeft + column.x, top = bodyTop, out = items, inlineObject = ::placeInlineObjectOnPage)
+                    left = bodyLeft + column.x, top = bodyTop, out = items, inlineObject = ::placeInlineObjectOnPage,
+                    head = head.takeIf { i == 0 })
                 chunkBottom = bodyTop + seg.vertPos + seg.height +
                     (if (i == segs.lastIndex && connectNext) seg.spacing + shape.spaceAfter else 0)
                 pageHasLines = true
@@ -444,6 +451,8 @@ class PageLayouter(
         return out
     }
 
+    private fun headOf(p: Paragraph): ParagraphHeads.Head? = currentSection?.let { heads.label(p, it) }
+
     internal fun fontFor(shape: CharShape, script: Script): FontSpec {
         var size = shape.sizeFor(script).toFloat()
         if (shape.superscript || shape.subscript) size *= SCRIPT_SCALE
@@ -465,6 +474,7 @@ class PageLayouter(
         top: Float,
         out: MutableList<PageItem>,
         inlineObject: (Inline, Float, Float) -> Unit,
+        head: ParagraphHeads.Head? = null,
     ) {
         val lineTop = top + seg.vertPos
         val baseline = lineTop + seg.baseline
@@ -475,9 +485,20 @@ class PageLayouter(
             !isFirst && shape.indent < 0 -> -shape.indent.toFloat()
             else -> 0f
         }
-        val x0 = left + seg.horzPos + indent
-        val available = seg.width - indent
         val atoms = atomsOf(p, seg.textStart, end)
+        // The paragraph head (number or bullet) sits at the line start; the text follows it after a
+        // gap of half the font size. Stored segments do not include it.
+        var headWidth = 0f
+        if (head != null && head.text.isNotEmpty()) {
+            val headShape = head.charShapeId?.let { document.charShape(it) } ?: atoms.firstOrNull { it.obj == null }?.shape ?: CharShape.DEFAULT
+            val widths = measure(head.text, headShape)
+            var hx = left + seg.horzPos + indent
+            val xs = FloatArray(head.text.length) { k -> hx.also { hx += widths[k] } }
+            emitText(head.text, xs, hx, baseline, headShape, scriptOf(head.text.first()), out)
+            headWidth = widths.sum() + headShape.baseSize * 0.5f
+        }
+        val x0 = left + seg.horzPos + indent + headWidth
+        val available = seg.width - indent - headWidth
 
         // Tabs advance to the next default tab stop measured from the segment start.
         var x = 0f
@@ -700,10 +721,12 @@ class PageLayouter(
     private fun placeFrame(frame: List<Pair<Paragraph, List<LineSeg>>>, left: Float, top: Float, width: Float, out: MutableList<PageItem>) {
         for ((p, segs) in frame) {
             val shape = document.paraShape(p.paraShapeId)
+            val head = headOf(p)
             segs.forEachIndexed { i, seg ->
                 val s = if (seg.width <= 0) seg.copy(width = (width - seg.horzPos - shape.marginRight).toInt()) else seg
                 placeLine(p, shape, s, isFirst = i == 0, isLast = i == segs.lastIndex, end = segs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE,
-                    left = left, top = top, out = out) { obj, ox, oy -> placeNested(obj, ox, oy, out) }
+                    left = left, top = top, out = out, inlineObject = { obj, ox, oy -> placeNested(obj, ox, oy, out) },
+                    head = head.takeIf { i == 0 })
             }
             p.inlines.forEach { inline ->
                 val pl = inline.placement() ?: return@forEach
