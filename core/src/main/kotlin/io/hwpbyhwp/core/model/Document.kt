@@ -34,7 +34,8 @@ data class Document(
                     if (isNotEmpty() && last() != '\n') append('\n')
                     inline.cells.forEach { cell -> cell.paragraphs.forEach { appendParagraph(it) } }
                 }
-                is PictureObject -> Unit
+                is AutoNumber -> if (inline.kind == AutoNumberKind.PAGE) append('#')
+                is PictureObject, is ColumnDefine, is HeaderFooter, is PageNumberPosition -> Unit
             }
         }
         append('\n')
@@ -116,6 +117,46 @@ sealed interface Inline {
 data class TextRun(val text: String, val charShapeId: Int, override val start: Int = 0) : Inline
 data class Tab(val charShapeId: Int, override val start: Int = 0) : Inline
 data class LineBreak(val charShapeId: Int, override val start: Int = 0) : Inline
+
+/** Starts a multi-column zone (단 정의). Applies from the paragraph that holds it onward. */
+data class ColumnDefine(
+    val count: Int,
+    val gap: Int,
+    /** Per-column widths; empty when all columns are equal. Proportional if they do not sum to the body width. */
+    val widths: List<Int> = emptyList(),
+    val gaps: List<Int> = emptyList(),
+    override val start: Int = 0,
+) : Inline
+
+enum class HeaderFooterKind { HEADER, FOOTER }
+enum class ApplyPage { BOTH, EVEN, ODD }
+
+/** 머리말/꼬리말: applies to pages from the one holding this control onward. */
+data class HeaderFooter(
+    val kind: HeaderFooterKind,
+    val applyPage: ApplyPage,
+    val paragraphs: List<Paragraph>,
+    override val start: Int = 0,
+) : Inline
+
+enum class PageNumberPlace { NONE, LEFT_TOP, CENTER_TOP, RIGHT_TOP, LEFT_BOTTOM, CENTER_BOTTOM, RIGHT_BOTTOM, OUTSIDE_TOP, OUTSIDE_BOTTOM, INSIDE_TOP, INSIDE_BOTTOM }
+
+/** 쪽 번호 위치: prints the page number in the header/footer area from this page on. */
+data class PageNumberPosition(
+    val place: PageNumberPlace,
+    val prefix: String = "",
+    val suffix: String = "",
+    override val start: Int = 0,
+) : Inline
+
+enum class AutoNumberKind { PAGE, TOTAL_PAGES, OTHER }
+
+/** A number filled in at layout time, e.g. the page number inside a footer. */
+data class AutoNumber(
+    val kind: AutoNumberKind,
+    val charShapeId: Int,
+    override val start: Int = 0,
+) : Inline
 
 /** How an object sits relative to the text around it. */
 data class ObjectPlacement(

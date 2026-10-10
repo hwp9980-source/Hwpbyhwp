@@ -1,6 +1,14 @@
 package io.hwpbyhwp.core.layout
 
+import io.hwpbyhwp.core.model.ApplyPage
+import io.hwpbyhwp.core.model.AutoNumber
+import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
+import io.hwpbyhwp.core.model.ColumnDefine
+import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.HeaderFooterKind
+import io.hwpbyhwp.core.model.PageNumberPlace
+import io.hwpbyhwp.core.model.PageNumberPosition
 import io.hwpbyhwp.core.model.BorderStyle
 import io.hwpbyhwp.core.model.CharShape
 import io.hwpbyhwp.core.model.Document
@@ -36,12 +44,59 @@ class PageLayouter(
     private val measurer: TextMeasurer,
 ) {
 
-    fun layout(): List<Page> = document.sections.flatMap { SectionFlow(it.page).run(it.paragraphs) }
+    /** Page number being laid out (1-based, counted across sections); used by page-number fields. */
+    private var pageNumber = 1
+    /** Total page count, known on the second pass when the document prints it. */
+    private var totalPages = 0
+
+    fun layout(): List<Page> {
+        val first = runAll()
+        if (!usesTotalPages()) return first
+        totalPages = first.size
+        return runAll()
+    }
+
+    private fun runAll(): List<Page> {
+        pageNumber = 1
+        val decorations = Decorations()
+        return document.sections.flatMap { SectionFlow(it.page, decorations).run(it.paragraphs) }
+    }
+
+    private fun usesTotalPages(): Boolean {
+        fun scan(ps: List<Paragraph>): Boolean = ps.any { p ->
+            p.inlines.any { i ->
+                (i is AutoNumber && i.kind == AutoNumberKind.TOTAL_PAGES) ||
+                    (i is HeaderFooter && scan(i.paragraphs)) ||
+                    (i is TableObject && i.cells.any { scan(it.paragraphs) })
+            }
+        }
+        return document.sections.any { scan(it.paragraphs) }
+    }
+
+    /** Header, footer and page-number settings; they carry over into following sections. */
+    private class Decorations {
+        val headers = HashMap<ApplyPage, HeaderFooter>()
+        val footers = HashMap<ApplyPage, HeaderFooter>()
+        var pageNumber: PageNumberPosition? = null
+
+        fun register(inline: Inline) {
+            when (inline) {
+                is HeaderFooter -> (if (inline.kind == HeaderFooterKind.HEADER) headers else footers)[inline.applyPage] = inline
+                is PageNumberPosition -> pageNumber = inline
+                else -> Unit
+            }
+        }
+
+        fun pick(map: Map<ApplyPage, HeaderFooter>, page: Int): HeaderFooter? =
+            map[if (page % 2 == 0) ApplyPage.EVEN else ApplyPage.ODD] ?: map[ApplyPage.BOTH]
+    }
+
+    private class Column(val x: Float, val width: Float)
 
     // ---------------------------------------------------------------------------------------------
     // Body flow with pagination
 
-    private inner class SectionFlow(private val setup: PageSetup) {
+    private inner class SectionFlow(private val setup: PageSetup, private val decorations: Decorations) {
         private val pages = mutableListOf<Page>()
         private var items = mutableListOf<PageItem>()
         private val bodyLeft = (setup.marginLeft + setup.marginGutter).toFloat()
@@ -52,17 +107,43 @@ class PageLayouter(
         /** Lowest point (relative to body top) used on the current page by lines or objects. */
         private var usedBottom = 0f
         private var pageHasLines = false
+        private var lastVertPos: Int? = null
         /** Running vertical position for paragraphs that carry no stored segments. */
         private var synthCursor = 0f
 
+        private var columns = listOf(Column(0f, bodyWidth))
+        private var columnIndex = 0
+        private val column get() = columns[columnIndex.coerceAtMost(columns.lastIndex)]
+
         fun run(paragraphs: List<Paragraph>): List<Page> {
             paragraphs.forEachIndexed { index, p ->
+                p.inlines.forEach { inline ->
+                    decorations.register(inline)
+                    if (inline is ColumnDefine) setColumns(inline)
+                }
                 if (index > 0 && (p.pageBreakBefore || document.paraShape(p.paraShapeId).pageBreakBefore) && hasContent()) newPage()
                 val segs = p.lineSegs.ifEmpty { synthesize(p) }
                 placeParagraph(p, segs)
             }
             finishPage()
             return pages
+        }
+
+        private fun setColumns(def: ColumnDefine) {
+            val n = def.count.coerceAtLeast(1)
+            columns = if (def.widths.size == n && def.widths.sum() > 0) {
+                // Widths either fill the body exactly or are proportions of it.
+                val total = def.widths.sum() + def.gaps.take(n - 1).sum()
+                val k = if (kotlin.math.abs(total - bodyWidth) < bodyWidth * 0.05f) 1f else bodyWidth / total
+                var x = 0f
+                def.widths.mapIndexed { i, w ->
+                    Column(x, w * k).also { x += (w + (def.gaps.getOrNull(i) ?: def.gap)) * k }
+                }
+            } else {
+                val w = (bodyWidth - def.gap * (n - 1)) / n
+                List(n) { Column(it * (w + def.gap), w) }
+            }
+            columnIndex = 0
         }
 
         private fun hasContent() = items.isNotEmpty() || usedBottom > 0f
@@ -73,16 +154,56 @@ class PageLayouter(
             usedBottom = 0f
             pageHasLines = false
             lastVertPos = null
+            columnIndex = 0
         }
 
         private fun finishPage() {
-            pages += Page(setup.effectiveWidth, setup.effectiveHeight, items)
+            val decorated = mutableListOf<PageItem>()
+            decorations.pick(decorations.headers, pageNumber)?.let {
+                layoutFrame(it.paragraphs, bodyLeft, setup.marginTop.toFloat(), bodyWidth, decorated)
+            }
+            decorations.pick(decorations.footers, pageNumber)?.let {
+                layoutFrame(it.paragraphs, bodyLeft, (setup.effectiveHeight - setup.marginBottom - setup.marginFooter).toFloat(), bodyWidth, decorated)
+            }
+            decorations.pageNumber?.let { drawPageNumber(it, decorated) }
+            pages += Page(setup.effectiveWidth, setup.effectiveHeight, decorated + items)
+            pageNumber++
+        }
+
+        private fun drawPageNumber(pos: PageNumberPosition, out: MutableList<PageItem>) {
+            if (pos.place == PageNumberPlace.NONE) return
+            val text = pos.prefix + pageNumber + pos.suffix
+            val shape = document.charShape(0)
+            val font = fontFor(shape, Script.LATIN)
+            val widths = measure(text, shape)
+            val width = widths.sum()
+            val odd = pageNumber % 2 == 1
+            val place = pos.place
+            val top = place in setOf(PageNumberPlace.LEFT_TOP, PageNumberPlace.CENTER_TOP, PageNumberPlace.RIGHT_TOP, PageNumberPlace.OUTSIDE_TOP, PageNumberPlace.INSIDE_TOP)
+            val right = when (place) {
+                PageNumberPlace.RIGHT_TOP, PageNumberPlace.RIGHT_BOTTOM -> true
+                PageNumberPlace.OUTSIDE_TOP, PageNumberPlace.OUTSIDE_BOTTOM -> odd
+                PageNumberPlace.INSIDE_TOP, PageNumberPlace.INSIDE_BOTTOM -> !odd
+                else -> false
+            }
+            val center = place == PageNumberPlace.CENTER_TOP || place == PageNumberPlace.CENTER_BOTTOM
+            val x = when {
+                center -> bodyLeft + (bodyWidth - width) / 2
+                right -> bodyLeft + bodyWidth - width
+                else -> bodyLeft
+            }
+            // Centered vertically in the header or footer band.
+            val baseline = if (top) setup.marginTop + setup.marginHeader / 2f + font.size * 0.35f
+            else setup.effectiveHeight - setup.marginBottom - setup.marginFooter / 2f + font.size * 0.35f
+            var cx = x
+            val xs = FloatArray(text.length) { i -> cx.also { cx += widths[i] } }
+            out += TextItem(text, xs, baseline, font, shape.textColor, 1f)
         }
 
         private fun synthesize(p: Paragraph): List<LineSeg> {
             val shape = document.paraShape(p.paraShapeId)
             var y = synthCursor + shape.spaceBefore
-            val lines = breakLines(p, bodyWidth)
+            val lines = breakLines(p, column.width)
             val segs = mutableListOf<LineSeg>()
             for (line in lines) {
                 var flags = 0
@@ -90,7 +211,7 @@ class PageLayouter(
                     y = 0f
                     flags = 1
                 }
-                segs += line.toSeg(y.toInt(), shape, flags, lineWidth(shape, bodyWidth))
+                segs += line.toSeg(y.toInt(), shape, flags, lineWidth(shape, column.width))
                 y += line.height + line.spacing
             }
             synthCursor = y + shape.spaceAfter
@@ -100,15 +221,20 @@ class PageLayouter(
         private fun placeParagraph(p: Paragraph, segs: List<LineSeg>) {
             val shape = document.paraShape(p.paraShapeId)
             var paraTop: Float? = null
+            var paraColumn = column
             segs.forEachIndexed { i, seg ->
-                // A new page starts where Hangul flagged it, or where the stored vertical position jumps back up.
+                // Hangul flags the first line of each page. Within a page, a stored vertical position that
+                // jumps back up means the text moved on to the next column (or, past the last one, a new page).
                 val jumpedBack = lastVertPos?.let { seg.vertPos < it - PAGE_TOLERANCE } == true
-                if (pageHasLines && (seg.firstLineOfPage || jumpedBack)) newPage()
+                if (pageHasLines) {
+                    if (seg.firstLineOfPage) newPage()
+                    else if (jumpedBack) { if (columnIndex + 1 < columns.size) columnIndex++ else newPage() }
+                }
                 lastVertPos = seg.vertPos
-                if (paraTop == null) paraTop = bodyTop + seg.vertPos
+                if (paraTop == null) { paraTop = bodyTop + seg.vertPos; paraColumn = column }
                 val end = segs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE
                 placeLine(p, shape, seg, isFirst = i == 0, isLast = i == segs.lastIndex, end = end,
-                    left = bodyLeft, top = bodyTop, out = items, inlineObject = ::placeInlineObjectOnPage)
+                    left = bodyLeft + column.x, top = bodyTop, out = items, inlineObject = ::placeInlineObjectOnPage)
                 pageHasLines = true
                 usedBottom = maxOf(usedBottom, (seg.vertPos + seg.height).toFloat())
                 if (p.lineSegs.isNotEmpty()) synthCursor = (seg.vertPos + seg.height + seg.spacing).toFloat()
@@ -118,11 +244,9 @@ class PageLayouter(
             p.inlines.forEach { inline ->
                 val placement = inline.placement() ?: return@forEach
                 if (placement.treatAsChar) return@forEach
-                placeFloating(inline, placement, anchorTop, shape)
+                placeFloating(inline, placement, anchorTop, shape, paraColumn)
             }
         }
-
-        private var lastVertPos: Int? = null
 
         private fun placeInlineObjectOnPage(obj: Inline, x: Float, top: Float) {
             when (obj) {
@@ -132,11 +256,12 @@ class PageLayouter(
             }
         }
 
-        private fun placeFloating(obj: Inline, pl: ObjectPlacement, paraTop: Float, shape: ParaShape) {
+        private fun placeFloating(obj: Inline, pl: ObjectPlacement, paraTop: Float, shape: ParaShape, col: Column) {
             val x = pl.horzOffset + when (pl.horzRelTo) {
                 RelTo.PAPER -> 0f
-                RelTo.PAGE, RelTo.COLUMN -> bodyLeft
-                RelTo.PARA -> bodyLeft + shape.marginLeft
+                RelTo.PAGE -> bodyLeft
+                RelTo.COLUMN -> bodyLeft + col.x
+                RelTo.PARA -> bodyLeft + col.x + shape.marginLeft
             }
             val y = pl.vertOffset + when (pl.vertRelTo) {
                 RelTo.PAPER -> 0f
@@ -204,7 +329,7 @@ class PageLayouter(
         val isTab: Boolean = false,
         val isBreak: Boolean = false,
     ) {
-        val isSpace get() = obj == null && !isTab && (char == ' ' || char == ' ' || char == '　')
+        val isSpace get() = obj == null && !isTab && (char == ' ' || char == '\u00A0' || char == '\u3000')
     }
 
     private fun atomsOf(p: Paragraph, from: Int = 0, to: Int = Int.MAX_VALUE): List<Atom> {
@@ -229,8 +354,19 @@ class PageLayouter(
                 is TableObject, is PictureObject -> if (inline.start in from until to && inline.placement()?.treatAsChar == true) {
                     val pl = inline.placement()!!
                     val w = inline.objWidth() + pl.marginLeft + pl.marginRight
-                    atoms += Atom(inline.start, '￼', CharShape.DEFAULT, Script.OTHER, w.toFloat(), obj = inline)
+                    atoms += Atom(inline.start, OBJECT_CHAR, CharShape.DEFAULT, Script.OTHER, w.toFloat(), obj = inline)
                 }
+                is AutoNumber -> if (inline.start in from until to) {
+                    val text = when (inline.kind) {
+                        AutoNumberKind.PAGE -> pageNumber.toString()
+                        AutoNumberKind.TOTAL_PAGES -> totalPages.takeIf { it > 0 }?.toString() ?: "#"
+                        AutoNumberKind.OTHER -> ""
+                    }
+                    val shape = document.charShape(inline.charShapeId)
+                    val widths = measure(text, shape)
+                    text.forEachIndexed { i, c -> atoms += Atom(inline.start, c, shape, scriptOf(c), widths[i]) }
+                }
+                else -> Unit
             }
         }
         return atoms
@@ -313,6 +449,14 @@ class PageLayouter(
             HAlign.JUSTIFY -> if (!isLast && !endsWithBreak && spaces > 0) perSpace = slack / spaces
             HAlign.DISTRIBUTE -> if (visible > 1) perChar = slack / (visible - 1)
             HAlign.DISTRIBUTE_SPACE -> if (spaces > 0) perSpace = slack / spaces
+        }
+        // Substitute fonts are often wider than the document's own. Hangul's stored break says the
+        // line fits, so squeeze it into the segment instead of running past the margin.
+        val overflow = natural - available
+        if (overflow > 0f && visible > 1 && available > 0f) {
+            offset = 0f
+            perSpace = 0f
+            perChar = -overflow / (visible - 1)
         }
 
         // Emit characters grouped by shape and script; each keeps its own x.
@@ -467,33 +611,43 @@ class PageLayouter(
     }
 
     private fun placeCellContent(cell: TableCell, cx: Float, cy: Float, w: Float, h: Float, out: MutableList<PageItem>) {
-        val left = cx + cell.marginLeft
         val innerWidth = w - cell.marginLeft - cell.marginRight
-        // Paragraphs inside a cell keep positions relative to the cell's text area.
-        var cursor = 0f
-        val laidOut = cell.paragraphs.map { p ->
-            val segs = p.lineSegs.ifEmpty {
-                val shape = document.paraShape(p.paraShapeId)
-                var y = cursor + shape.spaceBefore
-                breakLines(p, innerWidth).map { line ->
-                    line.toSeg(y.toInt(), shape, 0, lineWidth(shape, innerWidth)).also { y += line.height + line.spacing }
-                }.also { cursor = y + shape.spaceAfter }
-            }
-            segs.lastOrNull()?.let { cursor = maxOf(cursor, (it.vertPos + it.height + it.spacing).toFloat()) }
-            p to segs
-        }
-        val contentHeight = laidOut.flatMap { it.second }.maxOfOrNull { (it.vertPos + it.height).toFloat() } ?: 0f
+        val frame = frameSegments(cell.paragraphs, innerWidth)
+        val contentHeight = frame.flatMap { it.second }.maxOfOrNull { (it.vertPos + it.height).toFloat() } ?: 0f
         val innerHeight = h - cell.marginTop - cell.marginBottom
         val dy = when (cell.vertAlign) {
             VertAlign.TOP -> 0f
             VertAlign.CENTER -> ((innerHeight - contentHeight) / 2).coerceAtLeast(0f)
             VertAlign.BOTTOM -> (innerHeight - contentHeight).coerceAtLeast(0f)
         }
-        val top = cy + cell.marginTop + dy
-        for ((p, segs) in laidOut) {
+        placeFrame(frame, cx + cell.marginLeft, cy + cell.marginTop + dy, innerWidth, out)
+    }
+
+    /** Lays [paragraphs] into a box without pagination (cells, headers, footers). */
+    private fun layoutFrame(paragraphs: List<Paragraph>, left: Float, top: Float, width: Float, out: MutableList<PageItem>) =
+        placeFrame(frameSegments(paragraphs, width), left, top, width, out)
+
+    /** Stored segments of each paragraph, or computed ones stacked from the frame top. */
+    private fun frameSegments(paragraphs: List<Paragraph>, width: Float): List<Pair<Paragraph, List<LineSeg>>> {
+        var cursor = 0f
+        return paragraphs.map { p ->
+            val segs = p.lineSegs.ifEmpty {
+                val shape = document.paraShape(p.paraShapeId)
+                var y = cursor + shape.spaceBefore
+                breakLines(p, width).map { line ->
+                    line.toSeg(y.toInt(), shape, 0, lineWidth(shape, width)).also { y += line.height + line.spacing }
+                }.also { cursor = y + shape.spaceAfter }
+            }
+            segs.lastOrNull()?.let { cursor = maxOf(cursor, (it.vertPos + it.height + it.spacing).toFloat()) }
+            p to segs
+        }
+    }
+
+    private fun placeFrame(frame: List<Pair<Paragraph, List<LineSeg>>>, left: Float, top: Float, width: Float, out: MutableList<PageItem>) {
+        for ((p, segs) in frame) {
             val shape = document.paraShape(p.paraShapeId)
             segs.forEachIndexed { i, seg ->
-                val s = if (seg.width <= 0) seg.copy(width = (innerWidth - seg.horzPos - shape.marginRight).toInt()) else seg
+                val s = if (seg.width <= 0) seg.copy(width = (width - seg.horzPos - shape.marginRight).toInt()) else seg
                 placeLine(p, shape, s, isFirst = i == 0, isLast = i == segs.lastIndex, end = segs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE,
                     left = left, top = top, out = out) { obj, ox, oy -> placeNested(obj, ox, oy, out) }
             }
@@ -545,5 +699,6 @@ class PageLayouter(
         const val SCRIPT_SCALE = 0.7f
         /** Slack when comparing stored vertical positions, in HWPUNIT. */
         const val PAGE_TOLERANCE = 50f
+        const val OBJECT_CHAR = '\uFFFC'
     }
 }

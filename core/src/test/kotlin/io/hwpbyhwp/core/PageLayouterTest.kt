@@ -87,4 +87,13 @@ class PageLayouterTest {
             assertTrue(t.xs.last() + 500 <= bodyRight + 1, "text overflows the body: ${t.xs.last()}")
         }
     }
+
+    @Test
+    fun squeezesLinesWiderThanTheirStoredSegment() {
+        // 10 chars x 500 = 5000 natural width in a 4000-wide segment.
+        val p = Paragraph(0, listOf(TextRun("abcdefghij", 0, 0)), lineSegs = listOf(seg(0, 0, width = 4000)), length = 11)
+        val t = PageLayouter(doc(listOf(p)), mono).layout().single().items.filterIsInstance<TextItem>().single()
+        assertEquals(bodyLeft, t.xs.first())
+        assertEquals(bodyLeft + 4000 - 500, t.xs.last(), 0.01f)
+    }
 }

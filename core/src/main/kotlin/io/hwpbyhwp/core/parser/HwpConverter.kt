@@ -1,6 +1,14 @@
 package io.hwpbyhwp.core.parser
 
+import io.hwpbyhwp.core.model.ApplyPage
+import io.hwpbyhwp.core.model.AutoNumber
+import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
+import io.hwpbyhwp.core.model.ColumnDefine
+import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.HeaderFooterKind
+import io.hwpbyhwp.core.model.PageNumberPlace
+import io.hwpbyhwp.core.model.PageNumberPosition
 import io.hwpbyhwp.core.model.BorderFill
 import io.hwpbyhwp.core.model.BorderStyle
 import io.hwpbyhwp.core.model.CharShape
@@ -27,6 +35,13 @@ import io.hwpbyhwp.core.model.Underline
 import io.hwpbyhwp.core.model.VertAlign
 import kr.dogfoot.hwplib.`object`.HWPFile
 import kr.dogfoot.hwplib.`object`.bodytext.control.Control
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlAutoNumber
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlColumnDefine
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlFooter
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlHeader
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlPageNumberPosition
+import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.autonumber.NumberSort
+import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.header.HeaderFooterApplyPage
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlSectionDefine
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlTable
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlType
@@ -144,7 +159,7 @@ internal class HwpConverter(private val hwp: HWPFile) {
                 HWPCharType.ControlExtend -> {
                     // Extended control characters map one-to-one, in order, onto the paragraph's control list.
                     val control = controls.getOrNull(controlIndex++)
-                    convertControl(control, position)?.let { flushText(); inlines += it }
+                    convertControl(control, position, currentShape)?.let { flushText(); inlines += it }
                 }
                 else -> Unit
             }
@@ -170,8 +185,37 @@ internal class HwpConverter(private val hwp: HWPFile) {
         )
     }
 
-    private fun convertControl(control: Control?, position: Int): Inline? = when {
+    private fun convertControl(control: Control?, position: Int, charShape: Int): Inline? = when {
         control == null -> null
+        control is ControlColumnDefine -> control.header.let { h ->
+            ColumnDefine(
+                count = h.property.columnCount.toInt().coerceAtLeast(1),
+                gap = h.gapBetweenColumn,
+                widths = if (h.property.isSameWidth) emptyList() else h.columnInfoList.map { it.width },
+                gaps = if (h.property.isSameWidth) emptyList() else h.columnInfoList.map { it.gap },
+                start = position,
+            )
+        }
+        control is ControlHeader -> HeaderFooter(
+            HeaderFooterKind.HEADER, control.header.applyPage.toModel(),
+            control.paragraphList.paragraphs.orEmpty().map(::convertParagraph), position,
+        )
+        control is ControlFooter -> HeaderFooter(
+            HeaderFooterKind.FOOTER, control.header.applyPage.toModel(),
+            control.paragraphList.paragraphs.orEmpty().map(::convertParagraph), position,
+        )
+        control is ControlPageNumberPosition -> control.header.let { h ->
+            PageNumberPosition(
+                place = PageNumberPlace.entries.getOrNull(h.property.numberPosition.ordinal) ?: PageNumberPlace.NONE,
+                prefix = h.beforeDecorationLetter?.toUTF16LEString().orEmpty().trim('\u0000'),
+                suffix = h.afterDecorationLetter?.toUTF16LEString().orEmpty().trim('\u0000'),
+                start = position,
+            )
+        }
+        control is ControlAutoNumber -> AutoNumber(
+            if (control.header.property.numberSort == NumberSort.Page) AutoNumberKind.PAGE else AutoNumberKind.OTHER,
+            charShape, position,
+        )
         control.type == ControlType.Table -> convertTable(control as ControlTable).copy(start = position)
         control is GsoControl && control.gsoType == GsoControlType.Picture ->
             convertPicture(control as ControlPicture).copy(start = position)
@@ -216,6 +260,12 @@ internal class HwpConverter(private val hwp: HWPFile) {
         height = pic.header.height.toInt(),
         placement = pic.header.toPlacement(),
     )
+
+    private fun HeaderFooterApplyPage?.toModel(): ApplyPage = when (this) {
+        HeaderFooterApplyPage.EvenPage -> ApplyPage.EVEN
+        HeaderFooterApplyPage.OddPage -> ApplyPage.ODD
+        else -> ApplyPage.BOTH
+    }
 
     private fun CtrlHeaderGso.toPlacement(): ObjectPlacement {
         val prop = property

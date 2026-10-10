@@ -1,6 +1,14 @@
 package io.hwpbyhwp.core.parser
 
+import io.hwpbyhwp.core.model.ApplyPage
+import io.hwpbyhwp.core.model.AutoNumber
+import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
+import io.hwpbyhwp.core.model.ColumnDefine
+import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.model.HeaderFooterKind
+import io.hwpbyhwp.core.model.PageNumberPlace
+import io.hwpbyhwp.core.model.PageNumberPosition
 import io.hwpbyhwp.core.model.BorderFill
 import io.hwpbyhwp.core.model.BorderStyle
 import io.hwpbyhwp.core.model.CharShape
@@ -47,6 +55,14 @@ import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.TextWrapMethod
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.VertRelTo
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.VerticalAlign2
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.Ctrl
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.CtrlItem
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.AutoNum
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.ColPr
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.Footer
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.Header
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.ctrl.PageNum
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.ApplyPageType
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.NumType
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.Para
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.T
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Picture
@@ -117,7 +133,10 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
                     is T -> position = convertText(item, item.charPrIDRef()?.toIntId() ?: shape, position, inlines)
                     is Table -> { inlines += convertTable(item).copy(start = position); position += CONTROL_SIZE }
                     is Picture -> { convertPicture(item)?.let { inlines += it.copy(start = position) }; position += CONTROL_SIZE }
-                    is Ctrl -> position += CONTROL_SIZE * item.countOfCtrlItems()
+                    is Ctrl -> for (ctrl in item.ctrlItems() ?: emptyList()) {
+                        convertCtrl(ctrl, shape, position)?.let { inlines += it }
+                        position += CONTROL_SIZE
+                    }
                     else -> position += CONTROL_SIZE // other drawing objects, equations, form controls
                 }
             }
@@ -138,6 +157,42 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             // Binary HWP counts the paragraph-end character too.
             length = position + 1,
         )
+    }
+
+    private fun convertCtrl(ctrl: CtrlItem, shape: Int, position: Int): Inline? = when (ctrl) {
+        is ColPr -> {
+            val sizes = ctrl.colSzs()?.toList().orEmpty()
+            ColumnDefine(
+                count = (ctrl.colCount() ?: 1).coerceAtLeast(1),
+                gap = ctrl.sameGap() ?: 0,
+                widths = if (ctrl.sameSz() == false) sizes.map { it.width() ?: 0 } else emptyList(),
+                gaps = if (ctrl.sameSz() == false) sizes.map { it.gap() ?: 0 } else emptyList(),
+                start = position,
+            )
+        }
+        is Header -> HeaderFooter(HeaderFooterKind.HEADER, ctrl.applyPageType().toModel(), ctrl.subList()?.let(::convertParagraphs).orEmpty(), position)
+        is Footer -> HeaderFooter(HeaderFooterKind.FOOTER, ctrl.applyPageType().toModel(), ctrl.subList()?.let(::convertParagraphs).orEmpty(), position)
+        is PageNum -> PageNumberPosition(
+            place = PageNumberPlace.entries.getOrNull(ctrl.pos()?.ordinal ?: 0) ?: PageNumberPlace.NONE,
+            prefix = ctrl.sideChar().orEmpty().trim(),
+            suffix = ctrl.sideChar().orEmpty().trim(),
+            start = position,
+        )
+        is AutoNum -> AutoNumber(
+            when (ctrl.numType()) {
+                NumType.PAGE -> AutoNumberKind.PAGE
+                NumType.TOTAL_PAGE -> AutoNumberKind.TOTAL_PAGES
+                else -> AutoNumberKind.OTHER
+            },
+            shape, position,
+        )
+        else -> null
+    }
+
+    private fun ApplyPageType?.toModel(): ApplyPage = when (this) {
+        ApplyPageType.EVEN -> ApplyPage.EVEN
+        ApplyPageType.ODD -> ApplyPage.ODD
+        else -> ApplyPage.BOTH
     }
 
     /** Appends the text item's inlines and returns the position after it. */
