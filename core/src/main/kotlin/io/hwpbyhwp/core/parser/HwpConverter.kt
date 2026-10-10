@@ -308,9 +308,10 @@ internal class HwpConverter(private val hwp: HWPFile) {
         val line = normal?.lineInfo
         return ShapeObject(
             kind = kind,
-            width = c.header.width.toInt(),
-            height = c.header.height.toInt(),
-            placement = c.header.toPlacement(),
+            // Children of a group have no control header; their size comes from the shape component.
+            width = c.header?.width?.toInt() ?: comp.widthAtCurrent,
+            height = c.header?.height?.toInt() ?: comp.heightAtCurrent,
+            placement = c.header?.toPlacement() ?: ObjectPlacement.INLINE,
             transform = comp.renderingInfo.toAffine(),
             points = points,
             stroke = line?.takeIf { it.property.lineType != LineType.None }?.let {
