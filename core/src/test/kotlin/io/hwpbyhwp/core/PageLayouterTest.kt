@@ -100,8 +100,10 @@ class PageLayouterTest {
         // 10 chars x 500 = 5000 natural width in a 4000-wide segment.
         val p = Paragraph(0, listOf(TextRun("abcdefghij", 0, 0)), lineSegs = listOf(seg(0, 0, width = 4000)), length = 11)
         val t = PageLayouter(doc(listOf(p)), mono).layout().single().items.filterIsInstance<TextItem>().single()
+        // Compressed proportionally: every advance and the glyphs themselves shrink to 80 %.
         assertEquals(bodyLeft, t.xs.first())
-        assertEquals(bodyLeft + 4000 - 500, t.xs.last(), 0.01f)
+        assertEquals(bodyLeft + 9 * 400f, t.xs.last(), 0.01f)
+        assertEquals(0.8f, t.scaleX, 0.001f)
     }
 
     @Test
@@ -134,5 +136,14 @@ class PageLayouterTest {
         val leader = items.filterIsInstance<LineItem>().single()
         assertEquals(BorderStyle.DOT, leader.style)
         assertTrue(leader.x1 >= bodyLeft + 1000 && leader.x2 <= bodyLeft + 9000)
+    }
+
+    @Test
+    fun negativeLetterSpacingNeverCollapsesSpaces() {
+        val tight = CharShape(emptyMap(), baseSize = 1000, spacings = io.hwpbyhwp.core.model.Script.entries.associateWith { -30 })
+        val d = doc(listOf(Paragraph(0, listOf(TextRun("a b", 0, 0)), lineSegs = listOf(seg(0, 0)), length = 4)))
+            .copy(charShapes = mapOf(0 to tight))
+        val t = PageLayouter(d, mono).layout().single().items.filterIsInstance<TextItem>().single()
+        assertTrue(t.xs[2] - t.xs[1] > 0f, "space width must stay positive: ${t.xs.toList()}")
     }
 }

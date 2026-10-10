@@ -513,10 +513,16 @@ class PageLayouter(
             var j = i + 1
             while (j < text.length && scriptOf(text[j]) == script) j++
             val font = fontFor(shape, script)
-            val adv = measurer.advances(text.substring(i, j), font)
+            val adv = measurer.advances(displayText(text.substring(i, j)), font)
             val ratio = shape.ratioFor(script) / 100f
             val extra = font.size * shape.spacingFor(script) / 100f
-            for (k in i until j) out[k] = adv[k - i] * ratio + extra
+            for (k in i until j) {
+                val c = text[k]
+                // Korean fonts give a space about a third of an em; the substitute's is narrower, and
+                // documents tighten 자간 against the wider one. Keep spaces from collapsing.
+                val base = if (c == ' ' || c == '\u00A0') maxOf(adv[k - i], font.size * SPACE_EM) else adv[k - i]
+                out[k] = maxOf(base * ratio + extra, base * ratio * MIN_ADVANCE)
+            }
             i = j
         }
         return out
@@ -593,11 +599,14 @@ class PageLayouter(
         }
         // Substitute fonts are often wider than the document's own. Hangul's stored break says the
         // line fits, so squeeze it into the segment instead of running past the margin.
-        val overflow = natural - available
-        if (overflow > 0f && visible > 1 && available > 0f) {
+        // Compress proportionally, like a narrower 장평, so glyphs never overlap.
+        var squeeze = 1f
+        if (natural > available && available > 0f) {
+            squeeze = available / natural
             offset = 0f
             perSpace = 0f
-            perChar = -overflow / (visible - 1)
+            perChar = 0f
+            for (a in atoms) if (a.obj == null) a.width *= squeeze
         }
 
         // Emit characters grouped by shape and script; each keeps its own x.
@@ -636,7 +645,7 @@ class PageLayouter(
                 cx += b.width + (if (b.isSpace && j < visible) perSpace else 0f) + (if (j < visible - 1) perChar else 0f)
                 j++
             }
-            emitText(sb.toString(), xs.toFloatArray(), cx, baseline, a.shape, a.script, out)
+            emitText(sb.toString(), xs.toFloatArray(), cx, baseline, a.shape, a.script, out, squeeze)
             i = j
         }
     }
@@ -685,7 +694,10 @@ class PageLayouter(
         }
     }
 
-    private fun emitText(text: String, xs: FloatArray, endX: Float, baseline: Float, shape: CharShape, script: Script, out: MutableList<PageItem>) {
+    private fun emitText(
+        text: String, xs: FloatArray, endX: Float, baseline: Float, shape: CharShape, script: Script,
+        out: MutableList<PageItem>, squeeze: Float = 1f,
+    ) {
         val font = fontFor(shape, script)
         val full = shape.sizeFor(script).toFloat()
         val y = when {
@@ -696,7 +708,7 @@ class PageLayouter(
         val startX = xs.first()
         shape.shadeColor?.let { out += RectItem(startX, baseline - full * 0.85f, endX, baseline + full * 0.15f, it) }
         if (text.isNotBlank()) {
-            out += TextItem(text, xs, y, font, shape.textColor, shape.ratioFor(script) / 100f)
+            out += TextItem(displayText(text), xs, y, font, shape.textColor, shape.ratioFor(script) / 100f * squeeze)
         }
         val stroke = (full * 0.05f).coerceAtLeast(10f)
         when (shape.underline) {
@@ -1008,6 +1020,26 @@ class PageLayouter(
         /** Slack when comparing stored vertical positions, in HWPUNIT. */
         const val PAGE_TOLERANCE = 50f
         const val OBJECT_CHAR = '\uFFFC'
+        const val SPACE_EM = 0.33f
+        /** Letter spacing never shrinks a character below this share of its advance. */
+        const val MIN_ADVANCE = 0.4f
+
+        /**
+         * Characters Hangul documents use that the bundled fonts lack, mapped one-to-one (so text
+         * offsets stay valid) to look-alikes. Private-use code units become spaces.
+         */
+        fun displayText(text: String): String {
+            if (text.none { it == '\u2024' || it == '\u22C5' || it.isSurrogate() || it in '\uE000'..'\uF8FF' }) return text
+            return buildString(text.length) {
+                for (c in text) append(
+                    when {
+                        c == '\u2024' || c == '\u22C5' -> '\u00B7'
+                        c.isSurrogate() || c in '\uE000'..'\uF8FF' -> ' '
+                        else -> c
+                    },
+                )
+            }
+        }
         /** Room above notes for the separator line, and space between notes (HWPUNIT). */
         const val NOTE_SEPARATOR_SPACE = 850f
         const val NOTE_GAP = 280f
