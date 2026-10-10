@@ -1,0 +1,345 @@
+package io.hwpbyhwp.core.parser
+
+import io.hwpbyhwp.core.model.Border
+import io.hwpbyhwp.core.model.BorderFill
+import io.hwpbyhwp.core.model.BorderStyle
+import io.hwpbyhwp.core.model.CharShape
+import io.hwpbyhwp.core.model.Document
+import io.hwpbyhwp.core.model.HAlign
+import io.hwpbyhwp.core.model.Inline
+import io.hwpbyhwp.core.model.LineBreak
+import io.hwpbyhwp.core.model.LineSpacingType
+import io.hwpbyhwp.core.model.ObjectPlacement
+import io.hwpbyhwp.core.model.PageSetup
+import io.hwpbyhwp.core.model.ParaShape
+import io.hwpbyhwp.core.model.Paragraph
+import io.hwpbyhwp.core.model.PictureObject
+import io.hwpbyhwp.core.model.RelTo
+import io.hwpbyhwp.core.model.Script
+import io.hwpbyhwp.core.model.Section
+import io.hwpbyhwp.core.model.Tab
+import io.hwpbyhwp.core.model.TableCell
+import io.hwpbyhwp.core.model.TableObject
+import io.hwpbyhwp.core.model.TextRun
+import io.hwpbyhwp.core.model.TextWrap
+import io.hwpbyhwp.core.model.Underline
+import io.hwpbyhwp.core.model.VertAlign
+import kr.dogfoot.hwplib.`object`.HWPFile
+import kr.dogfoot.hwplib.`object`.bodytext.control.Control
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlSectionDefine
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlTable
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlType
+import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.CtrlHeaderGso
+import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.gso.HorzRelTo
+import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.gso.TextFlowMethod
+import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.gso.VertRelTo
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlPicture
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.GsoControl
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.GsoControlType
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.textbox.TextVerticalAlignment
+import kr.dogfoot.hwplib.`object`.bodytext.control.sectiondefine.PageDef
+import kr.dogfoot.hwplib.`object`.bodytext.control.sectiondefine.PaperDirection
+import kr.dogfoot.hwplib.`object`.bodytext.paragraph.Paragraph as HwpParagraph
+import kr.dogfoot.hwplib.`object`.bodytext.paragraph.text.HWPCharNormal
+import kr.dogfoot.hwplib.`object`.bodytext.paragraph.text.HWPCharType
+import kr.dogfoot.hwplib.`object`.docinfo.FaceName
+import kr.dogfoot.hwplib.`object`.docinfo.borderfill.BorderThickness
+import kr.dogfoot.hwplib.`object`.docinfo.borderfill.BorderType
+import kr.dogfoot.hwplib.`object`.docinfo.borderfill.EachBorder
+import kr.dogfoot.hwplib.`object`.docinfo.charshape.UnderLineSort
+import kr.dogfoot.hwplib.`object`.docinfo.parashape.Alignment
+import kr.dogfoot.hwplib.`object`.docinfo.parashape.LineSpaceSort
+import kr.dogfoot.hwplib.`object`.etc.Color4Byte
+import kr.dogfoot.hwplib.`object`.docinfo.CharShape as HwpCharShape
+import kr.dogfoot.hwplib.`object`.docinfo.ParaShape as HwpParaShape
+import kr.dogfoot.hwplib.`object`.docinfo.BorderFill as HwpBorderFill
+
+/** Converts a binary HWP 5.x document (read by hwplib) into the shared [Document] model. */
+internal class HwpConverter(private val hwp: HWPFile) {
+
+    private val docInfo = hwp.docInfo
+    private val faceNameLists: Map<Script, List<FaceName>> = mapOf(
+        Script.HANGUL to docInfo.hangulFaceNameList,
+        Script.LATIN to docInfo.englishFaceNameList,
+        Script.HANJA to docInfo.hanjaFaceNameList,
+        Script.JAPANESE to docInfo.japaneseFaceNameList,
+        Script.OTHER to docInfo.etcFaceNameList,
+        Script.SYMBOL to docInfo.symbolFaceNameList,
+        Script.USER to docInfo.userFaceNameList,
+    )
+    private val binaries = LinkedHashMap<String, ByteArray>()
+
+    fun convert(): Document {
+        loadBinaries()
+        var page = PageSetup.A4
+        val sections = hwp.bodyText.sectionList.map { section ->
+            val paragraphs = section.paragraphs.orEmpty().toList()
+            // The section definition lives in the first paragraph; it carries over to later sections that lack one.
+            paragraphs.firstOrNull()?.controlList.orEmpty()
+                .filterIsInstance<ControlSectionDefine>().firstOrNull()
+                ?.let { page = it.pageDef.toPageSetup() }
+            Section(page, paragraphs.map(::convertParagraph))
+        }
+        return Document(
+            sections = sections,
+            charShapes = docInfo.charShapeList.withIndex().associate { (i, cs) -> i to cs.toModel() },
+            paraShapes = docInfo.paraShapeList.withIndex().associate { (i, ps) -> i to ps.toModel() },
+            // Border/fill ids are 1-based in HWP.
+            borderFills = docInfo.borderFillList.withIndex().associate { (i, bf) -> i + 1 to bf.toModel() },
+            binaries = binaries,
+        )
+    }
+
+    private fun loadBinaries() {
+        val embedded = hwp.binData.embeddedBinaryDataList.associateBy { it.name.substringBefore('.').uppercase() }
+        docInfo.binDataList.forEachIndexed { index, bin ->
+            // Pictures reference bin data by 1-based index into DocInfo; storage names are BIN%04X.ext.
+            val storageName = "BIN%04X".format(bin.binDataID)
+            val data = embedded[storageName]?.data ?: return@forEachIndexed
+            binaries[(index + 1).toString()] = BinaryData.decode(data)
+        }
+    }
+
+    private fun convertParagraph(p: HwpParagraph): Paragraph {
+        val inlines = mutableListOf<Inline>()
+        val shapeChanges = p.charShape?.positonShapeIdPairList.orEmpty()
+            .map { it.position.toInt() to it.shapeId.toInt() }
+        val controls = p.controlList.orEmpty()
+        var controlIndex = 0
+        var position = 0
+        var shapeIndex = 0
+        var currentShape = shapeChanges.firstOrNull()?.second ?: 0
+        val text = StringBuilder()
+
+        fun flushText() {
+            if (text.isNotEmpty()) {
+                inlines += TextRun(text.toString(), currentShape)
+                text.clear()
+            }
+        }
+
+        for (ch in p.text?.charList.orEmpty()) {
+            while (shapeIndex + 1 < shapeChanges.size && shapeChanges[shapeIndex + 1].first <= position) {
+                flushText()
+                shapeIndex++
+                currentShape = shapeChanges[shapeIndex].second
+            }
+            when (ch.type) {
+                HWPCharType.Normal -> text.append((ch as HWPCharNormal).ch)
+                HWPCharType.ControlChar -> when (ch.code) {
+                    10 -> { flushText(); inlines += LineBreak(currentShape) }
+                    24 -> text.append('-')
+                    30 -> text.append(' ')
+                    31 -> text.append(' ')
+                    else -> Unit // 13 = paragraph end
+                }
+                HWPCharType.ControlInline -> if (ch.code == 9) { flushText(); inlines += Tab(currentShape) }
+                HWPCharType.ControlExtend -> {
+                    // Extended control characters map one-to-one, in order, onto the paragraph's control list.
+                    val control = controls.getOrNull(controlIndex++)
+                    convertControl(control)?.let { flushText(); inlines += it }
+                }
+                else -> Unit
+            }
+            position += ch.charSize
+        }
+        flushText()
+
+        val divide = p.header.divideSort
+        return Paragraph(
+            paraShapeId = p.header.paraShapeId,
+            inlines = inlines,
+            pageBreakBefore = divide.isDividePage,
+            columnBreakBefore = divide.isDivideColumn,
+        )
+    }
+
+    private fun convertControl(control: Control?): Inline? = when {
+        control == null -> null
+        control.type == ControlType.Table -> convertTable(control as ControlTable)
+        control is GsoControl && control.gsoType == GsoControlType.Picture -> convertPicture(control as ControlPicture)
+        else -> null
+    }
+
+    private fun convertTable(t: ControlTable): TableObject {
+        val table = t.table
+        val cells = t.rowList.flatMap { row ->
+            row.cellList.map { cell ->
+                val h = cell.listHeader
+                TableCell(
+                    row = h.rowIndex, col = h.colIndex, rowSpan = h.rowSpan, colSpan = h.colSpan,
+                    width = h.width.toInt(), height = h.height.toInt(),
+                    marginLeft = h.leftMargin, marginRight = h.rightMargin,
+                    marginTop = h.topMargin, marginBottom = h.bottomMargin,
+                    borderFillId = h.borderFillId,
+                    vertAlign = when (h.property.textVerticalAlignment) {
+                        TextVerticalAlignment.Center -> VertAlign.CENTER
+                        TextVerticalAlignment.Bottom -> VertAlign.BOTTOM
+                        else -> VertAlign.TOP
+                    },
+                    paragraphs = cell.paragraphList.paragraphs.orEmpty().map(::convertParagraph),
+                    isHeader = h.property.isTitleCell,
+                )
+            }
+        }
+        return TableObject(
+            rowCount = table.rowCount, colCount = table.columnCount,
+            width = t.header.width.toInt(), height = t.header.height.toInt(),
+            cellSpacing = table.cellSpacing,
+            borderFillId = table.borderFillId,
+            placement = t.header.toPlacement(),
+            cells = cells,
+            repeatHeader = table.property.isAutoRepeatTitleRow,
+        )
+    }
+
+    private fun convertPicture(pic: ControlPicture): PictureObject = PictureObject(
+        binId = pic.shapeComponentPicture.pictureInfo.binItemID.toString(),
+        width = pic.header.width.toInt(),
+        height = pic.header.height.toInt(),
+        placement = pic.header.toPlacement(),
+    )
+
+    private fun CtrlHeaderGso.toPlacement(): ObjectPlacement {
+        val prop = property
+        return ObjectPlacement(
+            treatAsChar = prop.isLikeWord,
+            wrap = when (prop.textFlowMethod) {
+                TextFlowMethod.FitWithText -> TextWrap.SQUARE
+                TextFlowMethod.BehindText -> TextWrap.BEHIND_TEXT
+                TextFlowMethod.InFrontOfText -> TextWrap.IN_FRONT_OF_TEXT
+                else -> TextWrap.TOP_AND_BOTTOM
+            },
+            vertRelTo = when (prop.vertRelTo) {
+                VertRelTo.Paper -> RelTo.PAPER
+                VertRelTo.Page -> RelTo.PAGE
+                else -> RelTo.PARA
+            },
+            horzRelTo = when (prop.horzRelTo) {
+                HorzRelTo.Paper -> RelTo.PAPER
+                HorzRelTo.Page -> RelTo.PAGE
+                HorzRelTo.Column -> RelTo.COLUMN
+                else -> RelTo.PARA
+            },
+            vertOffset = getyOffset().toInt(),
+            horzOffset = getxOffset().toInt(),
+            marginLeft = outterMarginLeft, marginRight = outterMarginRight,
+            marginTop = outterMarginTop, marginBottom = outterMarginBottom,
+        )
+    }
+
+    private fun PageDef.toPageSetup() = PageSetup(
+        width = paperWidth.toInt(), height = paperHeight.toInt(),
+        landscape = property.paperDirection == PaperDirection.Landscape,
+        marginLeft = leftMargin.toInt(), marginRight = rightMargin.toInt(),
+        marginTop = topMargin.toInt(), marginBottom = bottomMargin.toInt(),
+        marginHeader = headerMargin.toInt(), marginFooter = footerMargin.toInt(),
+        marginGutter = gutterMargin.toInt(),
+    )
+
+    private fun HwpCharShape.toModel(): CharShape {
+        val ids = faceNameIds.array
+        val scripts = Script.entries
+        val prop = property
+        return CharShape(
+            fontNames = scripts.mapIndexedNotNull { i, s ->
+                faceNameLists[s]?.getOrNull(ids[i])?.name?.let { s to it }
+            }.toMap(),
+            baseSize = baseSize,
+            relativeSizes = scripts.zip(relativeSizes.array.map { it.toInt() }).toMap(),
+            ratios = scripts.zip(ratios.array.map { it.toInt() }).toMap(),
+            spacings = scripts.zip(charSpaces.array.map { it.toInt() }).toMap(),
+            bold = prop.isBold,
+            italic = prop.isItalic,
+            underline = when (prop.underLineSort) {
+                UnderLineSort.Bottom -> Underline.BOTTOM
+                UnderLineSort.Top -> Underline.TOP
+                else -> Underline.NONE
+            },
+            strikeout = prop.isStrikeLine,
+            superscript = prop.isSuperScript,
+            subscript = prop.isSubScript,
+            textColor = charColor.toArgb(),
+            shadeColor = shadeColor.toArgbOrNull(),
+            underlineColor = underLineColor.toArgb(),
+            strikeoutColor = strikeLineColor.toArgb(),
+        )
+    }
+
+    private fun HwpParaShape.toModel(): ParaShape {
+        val prop = property1
+        return ParaShape(
+            align = when (prop.alignment) {
+                Alignment.Left -> HAlign.LEFT
+                Alignment.Right -> HAlign.RIGHT
+                Alignment.Center -> HAlign.CENTER
+                Alignment.Distribute -> HAlign.DISTRIBUTE
+                Alignment.Divide -> HAlign.DISTRIBUTE_SPACE
+                else -> HAlign.JUSTIFY
+            },
+            // HWP stores paragraph margins doubled relative to HWPUNIT.
+            marginLeft = leftMargin / 2,
+            marginRight = rightMargin / 2,
+            indent = indent / 2,
+            spaceBefore = topParaSpace / 2,
+            spaceAfter = bottomParaSpace / 2,
+            lineSpacingType = when (prop.lineSpaceSort) {
+                LineSpaceSort.FixedValue -> LineSpacingType.FIXED
+                LineSpaceSort.OnlyMargin -> LineSpacingType.BETWEEN_LINES
+                LineSpaceSort.AtLeast -> LineSpacingType.AT_LEAST
+                else -> LineSpacingType.PERCENT
+            },
+            lineSpacing = lineSpaceValue(prop.lineSpaceSort),
+            borderFillId = borderFillId,
+            keepWithNext = prop.isTogetherNextPara,
+            pageBreakBefore = prop.isSplitPageBeforePara,
+        )
+    }
+
+    private fun HwpParaShape.lineSpaceValue(sort: LineSpaceSort?): Int {
+        // lineSpace2 supersedes lineSpace from format 5.0.2.5 on; older files leave it zero.
+        val raw = if (lineSpace2 != 0L) lineSpace2.toInt() else lineSpace
+        return if (sort == null || sort == LineSpaceSort.RatioForLetter) raw else raw / 2
+    }
+
+    private fun HwpBorderFill.toModel() = BorderFill(
+        left = leftBorder.toModel(),
+        right = rightBorder.toModel(),
+        top = topBorder.toModel(),
+        bottom = bottomBorder.toModel(),
+        fillColor = fillInfo?.takeIf { it.type?.hasPatternFill() == true }
+            ?.patternFill?.backColor?.toArgbOrNull(),
+    )
+
+    private fun EachBorder.toModel(): Border = Border(
+        style = when (type) {
+            BorderType.None, null -> BorderStyle.NONE
+            BorderType.Solid -> BorderStyle.SOLID
+            BorderType.Dash -> BorderStyle.DASH
+            BorderType.Dot -> BorderStyle.DOT
+            BorderType.DashDot -> BorderStyle.DASH_DOT
+            BorderType.DashDotDot -> BorderStyle.DASH_DOT_DOT
+            BorderType.LongDash -> BorderStyle.LONG_DASH
+            BorderType.CircleDot -> BorderStyle.CIRCLE
+            BorderType.Double -> BorderStyle.DOUBLE
+            BorderType.ThinThick -> BorderStyle.THIN_THICK
+            BorderType.ThickThin -> BorderStyle.THICK_THIN
+            BorderType.ThinThickThin -> BorderStyle.THIN_THICK_THIN
+            BorderType.Wave -> BorderStyle.WAVE
+            BorderType.DoubleWave -> BorderStyle.DOUBLE_WAVE
+            else -> BorderStyle.SOLID
+        },
+        width = thickness.toHundredthMm(),
+        color = color.toArgb(),
+    )
+
+    private fun BorderThickness?.toHundredthMm(): Int =
+        this?.name?.removePrefix("MM")?.replace('_', '.')?.toFloatOrNull()?.let { (it * 100).toInt() } ?: 10
+
+    private fun Color4Byte?.toArgb(): Int =
+        if (this == null) CharShape.BLACK else (0xFF shl 24) or (r.toInt() shl 16) or (g.toInt() shl 8) or b.toInt()
+
+    /** HWP marks "no colour" with 0xFFFFFFFF (all four bytes set). */
+    private fun Color4Byte?.toArgbOrNull(): Int? =
+        if (this == null || value == 0xFFFFFFFFL) null else toArgb()
+}
