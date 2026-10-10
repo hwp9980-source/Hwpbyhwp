@@ -481,6 +481,12 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             lineSpacingType = type,
             lineSpacing = (spacing?.value() ?: 160) / sScale,
             borderFillId = border()?.borderFillIDRef().toIntId(),
+            borderOffsetLeft = border()?.offsetLeft() ?: 0,
+            borderOffsetRight = border()?.offsetRight() ?: 0,
+            borderOffsetTop = border()?.offsetTop() ?: 0,
+            borderOffsetBottom = border()?.offsetBottom() ?: 0,
+            borderConnect = border()?.connect() == true,
+            borderIgnoreMargin = border()?.ignoreMargin() == true,
             keepWithNext = breakSetting()?.keepWithNext() == true,
             pageBreakBefore = breakSetting()?.pageBreakBefore() == true,
         )

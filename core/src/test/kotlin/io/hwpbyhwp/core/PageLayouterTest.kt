@@ -1,8 +1,13 @@
 package io.hwpbyhwp.core
 
+import io.hwpbyhwp.core.layout.LineItem
 import io.hwpbyhwp.core.layout.PageLayouter
+import io.hwpbyhwp.core.layout.RectItem
 import io.hwpbyhwp.core.layout.TextItem
 import io.hwpbyhwp.core.layout.TextMeasurer
+import io.hwpbyhwp.core.model.Border
+import io.hwpbyhwp.core.model.BorderFill
+import io.hwpbyhwp.core.model.BorderStyle
 import io.hwpbyhwp.core.model.CharShape
 import io.hwpbyhwp.core.model.Document
 import io.hwpbyhwp.core.model.HAlign
@@ -95,5 +100,21 @@ class PageLayouterTest {
         val t = PageLayouter(doc(listOf(p)), mono).layout().single().items.filterIsInstance<TextItem>().single()
         assertEquals(bodyLeft, t.xs.first())
         assertEquals(bodyLeft + 4000 - 500, t.xs.last(), 0.01f)
+    }
+
+    @Test
+    fun drawsParagraphBorderAndBackgroundBehindText() {
+        val solid = Border(BorderStyle.SOLID, 12, CharShape.BLACK)
+        val d = doc(listOf(Paragraph(0, listOf(TextRun("ab", 0, 0)), lineSegs = listOf(seg(0, 0)), length = 3))).copy(
+            paraShapes = mapOf(0 to ParaShape(borderFillId = 5, borderOffsetLeft = 100, borderOffsetTop = 200)),
+            borderFills = mapOf(5 to BorderFill(solid, solid, solid, solid, fillColor = 0xFFFFFF00.toInt())),
+        )
+        val items = PageLayouter(d, mono).layout().single().items
+        val fill = items.filterIsInstance<RectItem>().single()
+        assertTrue(items.indexOf(fill) < items.indexOfFirst { it is TextItem }, "background must be under the text")
+        assertEquals(bodyLeft - 100, fill.left)
+        assertEquals(bodyTop - 200, fill.top)
+        assertEquals(bodyTop + 1000, fill.bottom)
+        assertEquals(4, items.filterIsInstance<LineItem>().size)
     }
 }

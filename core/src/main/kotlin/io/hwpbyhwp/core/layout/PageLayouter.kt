@@ -126,7 +126,7 @@ class PageLayouter(
                 }
                 if (index > 0 && (p.pageBreakBefore || document.paraShape(p.paraShapeId).pageBreakBefore) && hasContent()) newPage()
                 val segs = p.lineSegs.ifEmpty { synthesize(p) }
-                placeParagraph(p, segs)
+                placeParagraph(p, segs, connectsTo(p, paragraphs.getOrNull(index - 1)), connectsTo(p, paragraphs.getOrNull(index + 1)))
             }
             finishPage()
             return pages
@@ -221,27 +221,55 @@ class PageLayouter(
             return segs
         }
 
-        private fun placeParagraph(p: Paragraph, segs: List<LineSeg>) {
+        /** Whether [p]'s border merges with its neighbour [other] (same border, 테두리 연결 on both). */
+        private fun connectsTo(p: Paragraph, other: Paragraph?): Boolean {
+            if (other == null) return false
+            val a = document.paraShape(p.paraShapeId)
+            val b = document.paraShape(other.paraShapeId)
+            return a.borderConnect && b.borderConnect && a.borderFillId == b.borderFillId && a.borderFillId != 0
+        }
+
+        private fun placeParagraph(p: Paragraph, segs: List<LineSeg>, connectPrev: Boolean, connectNext: Boolean) {
             val shape = document.paraShape(p.paraShapeId)
             var paraTop: Float? = null
             var paraColumn = column
+            // The part of the paragraph on the current page/column, for its border and background.
+            var chunkStart = items.size
+            var chunkTop: Float? = null
+            var chunkBottom = 0f
+            var chunkIsFirst = true
+            fun flushBorder(isEnd: Boolean) {
+                val top = chunkTop ?: return
+                paragraphBorder(shape, column, top, chunkBottom, chunkStart,
+                    drawTop = chunkIsFirst && !connectPrev, drawBottom = !(isEnd && connectNext),
+                    padTop = chunkIsFirst && !connectPrev, padBottom = isEnd && !connectNext)
+                chunkTop = null
+                chunkIsFirst = false
+            }
             segs.forEachIndexed { i, seg ->
                 // Hangul flags the first line of each page. Within a page, a stored vertical position that
                 // jumps back up means the text moved on to the next column (or, past the last one, a new page).
                 val jumpedBack = lastVertPos?.let { seg.vertPos < it - PAGE_TOLERANCE } == true
-                if (pageHasLines) {
-                    if (seg.firstLineOfPage) newPage()
-                    else if (jumpedBack) { if (columnIndex + 1 < columns.size) columnIndex++ else newPage() }
+                if (pageHasLines && (seg.firstLineOfPage || jumpedBack)) {
+                    flushBorder(isEnd = false)
+                    if (seg.firstLineOfPage || columnIndex + 1 >= columns.size) newPage() else columnIndex++
                 }
                 lastVertPos = seg.vertPos
                 if (paraTop == null) { paraTop = bodyTop + seg.vertPos; paraColumn = column }
+                if (chunkTop == null) {
+                    chunkStart = items.size
+                    chunkTop = bodyTop + seg.vertPos - (if (i == 0 && connectPrev) shape.spaceBefore else 0)
+                }
                 val end = segs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE
                 placeLine(p, shape, seg, isFirst = i == 0, isLast = i == segs.lastIndex, end = end,
                     left = bodyLeft + column.x, top = bodyTop, out = items, inlineObject = ::placeInlineObjectOnPage)
+                chunkBottom = bodyTop + seg.vertPos + seg.height +
+                    (if (i == segs.lastIndex && connectNext) seg.spacing + shape.spaceAfter else 0)
                 pageHasLines = true
                 usedBottom = maxOf(usedBottom, (seg.vertPos + seg.height).toFloat())
                 if (p.lineSegs.isNotEmpty()) synthCursor = (seg.vertPos + seg.height + seg.spacing).toFloat()
             }
+            flushBorder(isEnd = true)
             // Objects not placed in the text flow are positioned relative to the paragraph or the page.
             val anchorTop = paraTop ?: (bodyTop + usedBottom)
             p.inlines.forEach { inline ->
@@ -249,6 +277,27 @@ class PageLayouter(
                 if (placement.treatAsChar) return@forEach
                 placeFloating(inline, placement, anchorTop, shape, paraColumn)
             }
+        }
+
+        /** Background goes under the paragraph's items (inserted at [insertAt]); lines go on top. */
+        private fun paragraphBorder(
+            shape: ParaShape, col: Column, top: Float, bottom: Float, insertAt: Int,
+            drawTop: Boolean, drawBottom: Boolean, padTop: Boolean, padBottom: Boolean,
+        ) {
+            val bf = document.borderFill(shape.borderFillId) ?: return
+            val visible = listOf(bf.left, bf.right, bf.top, bf.bottom).any { it.style != BorderStyle.NONE }
+            if (!visible && bf.fillColor == null) return
+            val marginL = if (shape.borderIgnoreMargin) 0 else shape.marginLeft.coerceAtLeast(0)
+            val marginR = if (shape.borderIgnoreMargin) 0 else shape.marginRight.coerceAtLeast(0)
+            val l = bodyLeft + col.x + marginL - shape.borderOffsetLeft
+            val r = bodyLeft + col.x + col.width - marginR + shape.borderOffsetRight
+            val t = top - (if (padTop) shape.borderOffsetTop else 0)
+            val b = bottom + (if (padBottom) shape.borderOffsetBottom else 0)
+            bf.fillColor?.let { items.add(insertAt.coerceIn(0, items.size), RectItem(l, t, r, b, it)) }
+            if (drawTop) border(bf.top, l, t, r, t, items)
+            if (drawBottom) border(bf.bottom, l, b, r, b, items)
+            border(bf.left, l, t, l, b, items)
+            border(bf.right, r, t, r, b, items)
         }
 
         private fun placeInlineObjectOnPage(obj: Inline, x: Float, top: Float) {

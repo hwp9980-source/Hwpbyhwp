@@ -341,6 +341,15 @@ data class ParaShape(
     /** Percent for [LineSpacingType.PERCENT], HWPUNIT otherwise. */
     val lineSpacing: Int = 160,
     val borderFillId: Int = 0,
+    /** Space between the paragraph text and its border. */
+    val borderOffsetLeft: Int = 0,
+    val borderOffsetRight: Int = 0,
+    val borderOffsetTop: Int = 0,
+    val borderOffsetBottom: Int = 0,
+    /** Merge the border with neighbouring paragraphs that use the same border (테두리 연결). */
+    val borderConnect: Boolean = false,
+    /** Draw the border across the paragraph margins (여백 무시). */
+    val borderIgnoreMargin: Boolean = false,
     val keepWithNext: Boolean = false,
     val pageBreakBefore: Boolean = false,
 ) {

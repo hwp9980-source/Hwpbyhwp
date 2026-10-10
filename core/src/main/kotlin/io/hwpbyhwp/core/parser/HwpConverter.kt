@@ -464,6 +464,12 @@ internal class HwpConverter(private val hwp: HWPFile) {
             },
             lineSpacing = lineSpaceValue(prop.lineSpaceSort),
             borderFillId = borderFillId,
+            borderOffsetLeft = leftBorderSpace.toInt(),
+            borderOffsetRight = rightBorderSpace.toInt(),
+            borderOffsetTop = topBorderSpace.toInt(),
+            borderOffsetBottom = bottomBorderSpace.toInt(),
+            borderConnect = prop.isLinkBorder,
+            borderIgnoreMargin = prop.isIgnoreParaMargin,
             keepWithNext = prop.isTogetherNextPara,
             pageBreakBefore = prop.isSplitPageBeforePara,
         )
