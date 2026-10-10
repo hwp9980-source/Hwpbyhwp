@@ -6,6 +6,8 @@ import io.hwpbyhwp.core.layout.genericFamilyOf
 import io.hwpbyhwp.core.layout.ImageItem
 import io.hwpbyhwp.core.layout.LineItem
 import io.hwpbyhwp.core.layout.Page
+import io.hwpbyhwp.core.layout.PathItem
+import io.hwpbyhwp.core.layout.PathOp
 import io.hwpbyhwp.core.layout.RectItem
 import io.hwpbyhwp.core.layout.TextItem
 import io.hwpbyhwp.core.layout.TextMeasurer
@@ -17,6 +19,7 @@ import java.awt.RenderingHints
 import java.awt.font.FontRenderContext
 import java.awt.geom.AffineTransform
 import java.awt.geom.Line2D
+import java.awt.geom.Path2D
 import java.awt.geom.Rectangle2D
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -82,6 +85,23 @@ object Java2DPreview {
                     if (item.scaleX != 1f) f = f.deriveFont(AffineTransform.getScaleInstance(item.scaleX.toDouble(), 1.0))
                     g.font = f
                     item.text.forEachIndexed { i, c -> g.drawString(c.toString(), item.xs[i], item.baseline) }
+                }
+                is PathItem -> {
+                    val path = Path2D.Float()
+                    item.ops.forEach { op ->
+                        when (op) {
+                            is PathOp.MoveTo -> path.moveTo(op.x, op.y)
+                            is PathOp.LineTo -> path.lineTo(op.x, op.y)
+                            is PathOp.CubicTo -> path.curveTo(op.x1, op.y1, op.x2, op.y2, op.x, op.y)
+                            PathOp.Close -> path.closePath()
+                        }
+                    }
+                    item.fill?.let { g.color = Color(it, true); g.fill(path) }
+                    item.stroke?.let {
+                        g.color = Color(it, true)
+                        g.stroke = BasicStroke(item.strokeWidth.coerceAtLeast(7200f / dpi))
+                        g.draw(path)
+                    }
                 }
                 is ImageItem -> {
                     val bytes = binaries[item.binId]

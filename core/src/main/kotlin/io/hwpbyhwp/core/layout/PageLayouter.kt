@@ -1,6 +1,9 @@
 package io.hwpbyhwp.core.layout
 
+import io.hwpbyhwp.core.model.Affine
 import io.hwpbyhwp.core.model.ApplyPage
+import io.hwpbyhwp.core.model.ShapeKind
+import io.hwpbyhwp.core.model.ShapeObject
 import io.hwpbyhwp.core.model.AutoNumber
 import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
@@ -252,6 +255,7 @@ class PageLayouter(
             when (obj) {
                 is TableObject -> placeTableOnPage(obj, x, top)
                 is PictureObject -> items += ImageItem(obj.binId, x, top, obj.width.toFloat(), obj.height.toFloat())
+                is ShapeObject -> drawShape(obj, x, top, items)
                 else -> Unit
             }
         }
@@ -271,6 +275,7 @@ class PageLayouter(
             when (obj) {
                 is TableObject -> placeTableOnPage(obj, x, y)
                 is PictureObject -> items += ImageItem(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat())
+                is ShapeObject -> drawShape(obj, x, y, items)
                 else -> Unit
             }
         }
@@ -351,7 +356,7 @@ class PageLayouter(
                 is LineBreak -> if (inline.start in from until to) {
                     atoms += Atom(inline.start, '\n', document.charShape(inline.charShapeId), Script.LATIN, 0f, isBreak = true)
                 }
-                is TableObject, is PictureObject -> if (inline.start in from until to && inline.placement()?.treatAsChar == true) {
+                is TableObject, is PictureObject, is ShapeObject -> if (inline.start in from until to && inline.placement()?.treatAsChar == true) {
                     val pl = inline.placement()!!
                     val w = inline.objWidth() + pl.marginLeft + pl.marginRight
                     atoms += Atom(inline.start, OBJECT_CHAR, CharShape.DEFAULT, Script.OTHER, w.toFloat(), obj = inline)
@@ -665,8 +670,67 @@ class PageLayouter(
                 drawTableRows(obj, grid, 0 until grid.rowHeights.size, x, y, out)
             }
             is PictureObject -> out += ImageItem(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat())
+            is ShapeObject -> drawShape(obj, x, y, out)
             else -> Unit
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Drawing objects
+
+    /**
+     * Draws a top-level drawing object into its box at ([x], [y]). Its own transform is fitted to
+     * the box, so files that keep the size change outside the rendering matrix still come out right.
+     */
+    private fun drawShape(s: ShapeObject, x: Float, y: Float, out: MutableList<PageItem>) {
+        val bounds = transformedBox(s, s.transform)
+        val sx = if (bounds.width > 0.5 && s.width > 0) s.width / bounds.width else 1.0
+        val sy = if (bounds.height > 0.5 && s.height > 0) s.height / bounds.height else 1.0
+        val fit = Affine(sx, 0.0, x - bounds.left * sx, 0.0, sy, y - bounds.top * sy)
+        drawShapeWith(s, fit * s.transform, out)
+    }
+
+    private fun drawShapeWith(s: ShapeObject, m: Affine, out: MutableList<PageItem>) {
+        when (s.kind) {
+            ShapeKind.CONTAINER -> s.children.forEach { drawShapeWith(it, m * it.transform, out) }
+            ShapeKind.PICTURE -> {
+                val b = transformedBox(s, m)
+                s.binId?.let { out += ImageItem(it, b.left.toFloat(), b.top.toFloat(), b.width.toFloat(), b.height.toFloat()) }
+            }
+            else -> {
+                ShapePaths.outline(s, m)?.let { ops ->
+                    val stroke = s.stroke
+                    out += PathItem(ops, s.fill.takeIf { s.kind != ShapeKind.LINE }, stroke?.color, (stroke?.width ?: 0).toFloat(), stroke?.style ?: BorderStyle.SOLID)
+                }
+            }
+        }
+        s.text?.let { tb ->
+            val b = transformedBox(s, m)
+            val width = (b.width - tb.marginLeft - tb.marginRight).toFloat()
+            val frame = frameSegments(tb.paragraphs, width)
+            val contentHeight = frame.flatMap { it.second }.maxOfOrNull { (it.vertPos + it.height).toFloat() } ?: 0f
+            val inner = (b.height - tb.marginTop - tb.marginBottom).toFloat()
+            val dy = when (tb.vertAlign) {
+                VertAlign.TOP -> 0f
+                VertAlign.CENTER -> ((inner - contentHeight) / 2).coerceAtLeast(0f)
+                VertAlign.BOTTOM -> (inner - contentHeight).coerceAtLeast(0f)
+            }
+            placeFrame(frame, (b.left + tb.marginLeft).toFloat(), (b.top + tb.marginTop).toFloat() + dy, width, out)
+        }
+    }
+
+    private class Box(val left: Double, val top: Double, val right: Double, val bottom: Double) {
+        val width get() = right - left
+        val height get() = bottom - top
+    }
+
+    /** Page-space bounding box of the shape's original-size frame under [m]. */
+    private fun transformedBox(s: ShapeObject, m: Affine): Box {
+        val w = (if (s.originalWidth > 0) s.originalWidth else s.width).toDouble()
+        val h = (if (s.originalHeight > 0) s.originalHeight else s.height).toDouble()
+        val xs = listOf(m.x(0.0, 0.0), m.x(w, 0.0), m.x(0.0, h), m.x(w, h))
+        val ys = listOf(m.y(0.0, 0.0), m.y(w, 0.0), m.y(0.0, h), m.y(w, h))
+        return Box(xs.min(), ys.min(), xs.max(), ys.max())
     }
 
     private fun border(b: Border, x1: Float, y1: Float, x2: Float, y2: Float, out: MutableList<PageItem>) {
@@ -678,18 +742,21 @@ class PageLayouter(
     private fun Inline.placement(): ObjectPlacement? = when (this) {
         is TableObject -> placement
         is PictureObject -> placement
+        is ShapeObject -> placement
         else -> null
     }
 
     private fun Inline.objWidth(): Int = when (this) {
         is TableObject -> if (width > 0) width else TableGrid.of(this).width
         is PictureObject -> width
+        is ShapeObject -> width
         else -> 0
     }
 
     private fun Inline.objHeight(): Int = when (this) {
         is TableObject -> if (height > 0) height else TableGrid.of(this).height
         is PictureObject -> height
+        is ShapeObject -> height
         else -> 0
     }
 

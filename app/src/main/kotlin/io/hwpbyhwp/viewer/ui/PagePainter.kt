@@ -5,11 +5,14 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.util.LruCache
 import io.hwpbyhwp.core.layout.ImageItem
 import io.hwpbyhwp.core.layout.LineItem
 import io.hwpbyhwp.core.layout.Page
+import io.hwpbyhwp.core.layout.PathItem
+import io.hwpbyhwp.core.layout.PathOp
 import io.hwpbyhwp.core.layout.RectItem
 import io.hwpbyhwp.core.layout.TextItem
 import io.hwpbyhwp.core.model.BorderStyle
@@ -39,12 +42,7 @@ class PagePainter(private val binaries: Map<String, ByteArray>) {
                     val w = (item.width * scale).coerceAtLeast(1f)
                     stroke.color = item.color
                     stroke.strokeWidth = w
-                    stroke.pathEffect = when (item.style) {
-                        BorderStyle.DOT, BorderStyle.CIRCLE -> DashPathEffect(floatArrayOf(w, w * 2), 0f)
-                        BorderStyle.DASH, BorderStyle.LONG_DASH -> DashPathEffect(floatArrayOf(w * 6, w * 3), 0f)
-                        BorderStyle.DASH_DOT, BorderStyle.DASH_DOT_DOT -> DashPathEffect(floatArrayOf(w * 6, w * 2, w, w * 2), 0f)
-                        else -> null
-                    }
+                    stroke.pathEffect = dashFor(item.style, w)
                     canvas.drawLine(item.x1 * scale, item.y1 * scale, item.x2 * scale, item.y2 * scale, stroke)
                 }
                 is TextItem -> {
@@ -57,6 +55,25 @@ class PagePainter(private val binaries: Map<String, ByteArray>) {
                         canvas.drawText(item.text, i, i + 1, item.xs[i] * scale, y, text)
                     }
                 }
+                is PathItem -> {
+                    val path = Path()
+                    item.ops.forEach { op ->
+                        when (op) {
+                            is PathOp.MoveTo -> path.moveTo(op.x * scale, op.y * scale)
+                            is PathOp.LineTo -> path.lineTo(op.x * scale, op.y * scale)
+                            is PathOp.CubicTo -> path.cubicTo(op.x1 * scale, op.y1 * scale, op.x2 * scale, op.y2 * scale, op.x * scale, op.y * scale)
+                            PathOp.Close -> path.close()
+                        }
+                    }
+                    item.fill?.let { fill.color = it; canvas.drawPath(path, fill) }
+                    item.stroke?.let {
+                        val w = (item.strokeWidth * scale).coerceAtLeast(1f)
+                        stroke.color = it
+                        stroke.strokeWidth = w
+                        stroke.pathEffect = dashFor(item.style, w)
+                        canvas.drawPath(path, stroke)
+                    }
+                }
                 is ImageItem -> {
                     val dst = RectF(item.left * scale, item.top * scale, (item.left + item.width) * scale, (item.top + item.height) * scale)
                     val bmp = bitmap(item.binId, dst.width().toInt(), dst.height().toInt())
@@ -64,6 +81,13 @@ class PagePainter(private val binaries: Map<String, ByteArray>) {
                 }
             }
         }
+    }
+
+    private fun dashFor(style: BorderStyle, w: Float) = when (style) {
+        BorderStyle.DOT, BorderStyle.CIRCLE -> DashPathEffect(floatArrayOf(w, w * 2), 0f)
+        BorderStyle.DASH, BorderStyle.LONG_DASH -> DashPathEffect(floatArrayOf(w * 6, w * 3), 0f)
+        BorderStyle.DASH_DOT, BorderStyle.DASH_DOT_DOT -> DashPathEffect(floatArrayOf(w * 6, w * 2, w, w * 2), 0f)
+        else -> null
     }
 
     /** Decodes once per image, downsampled to roughly the size it is shown at. */

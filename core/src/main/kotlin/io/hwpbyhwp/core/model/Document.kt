@@ -35,6 +35,7 @@ data class Document(
                     inline.cells.forEach { cell -> cell.paragraphs.forEach { appendParagraph(it) } }
                 }
                 is AutoNumber -> if (inline.kind == AutoNumberKind.PAGE) append('#')
+                is ShapeObject -> inline.text?.paragraphs?.forEach { appendParagraph(it) }
                 is PictureObject, is ColumnDefine, is HeaderFooter, is PageNumberPosition -> Unit
             }
         }
@@ -155,6 +156,73 @@ enum class AutoNumberKind { PAGE, TOTAL_PAGES, OTHER }
 data class AutoNumber(
     val kind: AutoNumberKind,
     val charShapeId: Int,
+    override val start: Int = 0,
+) : Inline
+
+/** 2D affine transform: x' = a*x + b*y + c, y' = d*x + e*y + f (HWP's 3x2 matrix layout). */
+data class Affine(val a: Double, val b: Double, val c: Double, val d: Double, val e: Double, val f: Double) {
+    fun x(x: Double, y: Double) = a * x + b * y + c
+    fun y(x: Double, y: Double) = d * x + e * y + f
+
+    /** this ∘ other: apply [other] first. */
+    operator fun times(o: Affine) = Affine(
+        a * o.a + b * o.d, a * o.b + b * o.e, a * o.c + b * o.f + c,
+        d * o.a + e * o.d, d * o.b + e * o.e, d * o.c + e * o.f + f,
+    )
+
+    companion object {
+        val IDENTITY = Affine(1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    }
+}
+
+data class Pt(val x: Double, val y: Double)
+
+enum class ShapeKind { LINE, RECTANGLE, ELLIPSE, ARC, POLYGON, CURVE, CONTAINER, PICTURE }
+enum class ArcKind { ARC, PIE, CHORD }
+
+data class Stroke(
+    /** ARGB. */
+    val color: Int,
+    /** HWPUNIT. */
+    val width: Int,
+    val style: BorderStyle,
+)
+
+/** Text inside a drawing object (글상자). */
+data class TextBox(
+    val paragraphs: List<Paragraph>,
+    val marginLeft: Int,
+    val marginRight: Int,
+    val marginTop: Int,
+    val marginBottom: Int,
+    val vertAlign: VertAlign,
+)
+
+/**
+ * A drawing object (그리기 개체). Geometry is in the shape's own coordinates; [transform] maps it
+ * into the object's box (or, for a child, into its container's coordinates).
+ */
+data class ShapeObject(
+    val kind: ShapeKind,
+    val width: Int,
+    val height: Int,
+    val placement: ObjectPlacement,
+    val transform: Affine,
+    /** Rectangle: 4 corners; line: 2 ends; ellipse/arc: center, axis 1, axis 2; polygon/curve: vertices. */
+    val points: List<Pt>,
+    val stroke: Stroke?,
+    /** ARGB, or null when unfilled. */
+    val fill: Int?,
+    /** Rounded-corner ratio of a rectangle, percent of half the shorter side. */
+    val roundRatio: Int = 0,
+    val arcKind: ArcKind = ArcKind.ARC,
+    val text: TextBox? = null,
+    val children: List<ShapeObject> = emptyList(),
+    /** For [ShapeKind.PICTURE] children of a group. */
+    val binId: String? = null,
+    /** Size in the shape's own coordinates (before [transform]). */
+    val originalWidth: Int = width,
+    val originalHeight: Int = height,
     override val start: Int = 0,
 ) : Inline
 

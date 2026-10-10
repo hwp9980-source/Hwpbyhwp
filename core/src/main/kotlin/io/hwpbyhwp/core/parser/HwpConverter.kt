@@ -1,6 +1,13 @@
 package io.hwpbyhwp.core.parser
 
+import io.hwpbyhwp.core.model.Affine
 import io.hwpbyhwp.core.model.ApplyPage
+import io.hwpbyhwp.core.model.ArcKind
+import io.hwpbyhwp.core.model.Pt
+import io.hwpbyhwp.core.model.ShapeKind
+import io.hwpbyhwp.core.model.ShapeObject
+import io.hwpbyhwp.core.model.Stroke
+import io.hwpbyhwp.core.model.TextBox
 import io.hwpbyhwp.core.model.AutoNumber
 import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
@@ -49,7 +56,19 @@ import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.CtrlHeaderGso
 import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.gso.HorzRelTo
 import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.gso.TextFlowMethod
 import kr.dogfoot.hwplib.`object`.bodytext.control.ctrlheader.gso.VertRelTo
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlArc
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlContainer
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlCurve
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlEllipse
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlLine
 import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlPicture
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlPolygon
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.ControlRectangle
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.shapecomponent.ShapeComponentNormal
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.shapecomponent.lineinfo.LineType
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.shapecomponent.renderingnfo.Matrix
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.shapecomponent.renderingnfo.RenderingInfo
+import kr.dogfoot.hwplib.`object`.bodytext.control.gso.shapecomponenteach.arc.ArcType
 import kr.dogfoot.hwplib.`object`.bodytext.control.gso.GsoControl
 import kr.dogfoot.hwplib.`object`.bodytext.control.gso.GsoControlType
 import kr.dogfoot.hwplib.`object`.bodytext.control.gso.textbox.TextVerticalAlignment
@@ -219,6 +238,7 @@ internal class HwpConverter(private val hwp: HWPFile) {
         control.type == ControlType.Table -> convertTable(control as ControlTable).copy(start = position)
         control is GsoControl && control.gsoType == GsoControlType.Picture ->
             convertPicture(control as ControlPicture).copy(start = position)
+        control is GsoControl -> convertShape(control)?.copy(start = position)
         else -> null
     }
 
@@ -260,6 +280,91 @@ internal class HwpConverter(private val hwp: HWPFile) {
         height = pic.header.height.toInt(),
         placement = pic.header.toPlacement(),
     )
+
+    /** Drawing objects; children of a group carry their own transform into the group's space. */
+    private fun convertShape(c: GsoControl): ShapeObject? {
+        val comp = c.shapeComponent ?: return null
+        val normal = comp as? ShapeComponentNormal
+        val textBox = when (c) {
+            is ControlRectangle -> c.textBox
+            is ControlEllipse -> c.textBox
+            is ControlPolygon -> c.textBox
+            is ControlArc -> c.textBox
+            is ControlCurve -> c.textBox
+            else -> null
+        }
+        fun pts(vararg xy: Number) = xy.toList().chunked(2) { Pt(it[0].toDouble(), it[1].toDouble()) }
+        val (kind, points) = when (c) {
+            is ControlLine -> c.shapeComponentLine.let { ShapeKind.LINE to pts(it.startX, it.startY, it.endX, it.endY) }
+            is ControlRectangle -> c.shapeComponentRectangle.let { ShapeKind.RECTANGLE to pts(it.x1, it.y1, it.x2, it.y2, it.x3, it.y3, it.x4, it.y4) }
+            is ControlEllipse -> c.shapeComponentEllipse.let { ShapeKind.ELLIPSE to pts(it.centerX, it.centerY, it.axis1X, it.axis1Y, it.axis2X, it.axis2Y) }
+            is ControlArc -> c.shapeComponentArc.let { ShapeKind.ARC to pts(it.centerX, it.centerY, it.axis1X, it.axis1Y, it.axis2X, it.axis2Y) }
+            is ControlPolygon -> ShapeKind.POLYGON to c.shapeComponentPolygon.positionList.map { Pt(it.x.toDouble(), it.y.toDouble()) }
+            is ControlCurve -> ShapeKind.CURVE to c.shapeComponentCurve.positionList.map { Pt(it.x.toDouble(), it.y.toDouble()) }
+            is ControlContainer -> ShapeKind.CONTAINER to emptyList()
+            is ControlPicture -> ShapeKind.PICTURE to pts(0, 0, comp.widthAtCreate, comp.heightAtCreate)
+            else -> return null
+        }
+        val line = normal?.lineInfo
+        return ShapeObject(
+            kind = kind,
+            width = c.header.width.toInt(),
+            height = c.header.height.toInt(),
+            placement = c.header.toPlacement(),
+            transform = comp.renderingInfo.toAffine(),
+            points = points,
+            stroke = line?.takeIf { it.property.lineType != LineType.None }?.let {
+                Stroke(it.color.toArgb(), it.thickness, it.property.lineType.toBorderStyle())
+            },
+            fill = normal?.fillInfo?.takeIf { it.type?.hasPatternFill() == true }?.patternFill?.backColor?.toArgbOrNull(),
+            roundRatio = (c as? ControlRectangle)?.shapeComponentRectangle?.roundRate?.toInt() ?: 0,
+            arcKind = when ((c as? ControlArc)?.shapeComponentArc?.arcType) {
+                ArcType.CircularSector -> ArcKind.PIE
+                ArcType.Bow -> ArcKind.CHORD
+                else -> ArcKind.ARC
+            },
+            text = textBox?.let { tb ->
+                val h = tb.listHeader
+                TextBox(
+                    paragraphs = tb.paragraphList.paragraphs.orEmpty().map(::convertParagraph),
+                    marginLeft = h.leftMargin, marginRight = h.rightMargin, marginTop = h.topMargin, marginBottom = h.bottomMargin,
+                    vertAlign = when (h.property.textVerticalAlignment) {
+                        TextVerticalAlignment.Center -> VertAlign.CENTER
+                        TextVerticalAlignment.Bottom -> VertAlign.BOTTOM
+                        else -> VertAlign.TOP
+                    },
+                )
+            },
+            children = (c as? ControlContainer)?.childControlList.orEmpty().mapNotNull(::convertShape),
+            binId = (c as? ControlPicture)?.shapeComponentPicture?.pictureInfo?.binItemID?.toString(),
+            originalWidth = comp.widthAtCreate,
+            originalHeight = comp.heightAtCreate,
+        )
+    }
+
+    /** Translation, then each scale/rotation pair, as HWP stores them. */
+    private fun RenderingInfo?.toAffine(): Affine {
+        if (this == null) return Affine.IDENTITY
+        var m = translationMatrix.toAffine()
+        scaleRotateMatrixPairList.orEmpty().forEach { m = m * it.scaleMatrix.toAffine() * it.rotateMatrix.toAffine() }
+        return m
+    }
+
+    private fun Matrix?.toAffine(): Affine {
+        val v = this?.values ?: return Affine.IDENTITY
+        return if (v.size >= 6) Affine(v[0], v[1], v[2], v[3], v[4], v[5]) else Affine.IDENTITY
+    }
+
+    private fun LineType.toBorderStyle(): BorderStyle = when (this) {
+        LineType.Dash -> BorderStyle.DASH
+        LineType.Dot -> BorderStyle.DOT
+        LineType.DashDot -> BorderStyle.DASH_DOT
+        LineType.DashDotDot -> BorderStyle.DASH_DOT_DOT
+        LineType.LongDash -> BorderStyle.LONG_DASH
+        LineType.CircleDot -> BorderStyle.CIRCLE
+        LineType.Double -> BorderStyle.DOUBLE
+        else -> BorderStyle.SOLID
+    }
 
     private fun HeaderFooterApplyPage?.toModel(): ApplyPage = when (this) {
         HeaderFooterApplyPage.EvenPage -> ApplyPage.EVEN

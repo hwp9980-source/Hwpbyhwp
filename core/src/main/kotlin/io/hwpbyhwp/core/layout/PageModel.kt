@@ -70,3 +70,21 @@ fun interface TextMeasurer {
     /** Advance width of each character of [text] in HWPUNIT, before 장평/자간 adjustments. */
     fun advances(text: String, font: FontSpec): FloatArray
 }
+
+/** A vector path (drawing objects). Coordinates are page HWPUNIT. */
+class PathItem(
+    val ops: List<PathOp>,
+    /** ARGB fill, or null. */
+    val fill: Int?,
+    /** ARGB stroke, or null. */
+    val stroke: Int?,
+    val strokeWidth: Float,
+    val style: BorderStyle,
+) : PageItem
+
+sealed interface PathOp {
+    data class MoveTo(val x: Float, val y: Float) : PathOp
+    data class LineTo(val x: Float, val y: Float) : PathOp
+    data class CubicTo(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val x: Float, val y: Float) : PathOp
+    data object Close : PathOp
+}

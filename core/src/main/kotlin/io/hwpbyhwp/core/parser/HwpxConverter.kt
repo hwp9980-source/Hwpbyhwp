@@ -1,6 +1,13 @@
 package io.hwpbyhwp.core.parser
 
+import io.hwpbyhwp.core.model.Affine
 import io.hwpbyhwp.core.model.ApplyPage
+import io.hwpbyhwp.core.model.ArcKind
+import io.hwpbyhwp.core.model.Pt
+import io.hwpbyhwp.core.model.ShapeKind
+import io.hwpbyhwp.core.model.ShapeObject
+import io.hwpbyhwp.core.model.Stroke
+import io.hwpbyhwp.core.model.TextBox
 import io.hwpbyhwp.core.model.AutoNumber
 import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
@@ -66,8 +73,19 @@ import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.NumType
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.Para
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.T
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Picture
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Container
+import kr.dogfoot.hwpxlib.`object`.common.baseobject.Point as XPoint
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Arc as XArc
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Curve as XCurve
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Ellipse as XEllipse
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Line as XLine
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Polygon as XPolygon
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Rectangle as XRectangle
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.drawingobject.DrawingObject
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.shapecomponent.ShapeComponent
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.shapecomponent.RenderingInfo as XRenderingInfo
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Table
-import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.shapeobject.ShapeObject
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.shapeobject.ShapeObject as XShapeObject
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.secpr.pagepr.PagePr
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.FWSpace
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.Hyphen
@@ -137,7 +155,8 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
                         convertCtrl(ctrl, shape, position)?.let { inlines += it }
                         position += CONTROL_SIZE
                     }
-                    else -> position += CONTROL_SIZE // other drawing objects, equations, form controls
+                    is ShapeComponent<*> -> { convertShape(item)?.let { inlines += it.copy(start = position) }; position += CONTROL_SIZE }
+                    else -> position += CONTROL_SIZE // equations, form controls, OLE
                 }
             }
         }
@@ -187,6 +206,84 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             shape, position,
         )
         else -> null
+    }
+
+    /** Drawing objects; children of a group carry their own transform into the group's space. */
+    private fun convertShape(c: ShapeComponent<*>): ShapeObject? {
+        fun pt(p: XPoint?) = Pt(p?.x()?.toDouble() ?: 0.0, p?.y()?.toDouble() ?: 0.0)
+        val (kind, points) = when (c) {
+            is XLine -> ShapeKind.LINE to listOf(pt(c.startPt()), pt(c.endPt()))
+            is XRectangle -> ShapeKind.RECTANGLE to listOf(pt(c.pt0()), pt(c.pt1()), pt(c.pt2()), pt(c.pt3()))
+            is XEllipse -> ShapeKind.ELLIPSE to listOf(pt(c.center()), pt(c.ax1()), pt(c.ax2()))
+            is XArc -> ShapeKind.ARC to listOf(pt(c.center()), pt(c.ax1()), pt(c.ax2()))
+            is XPolygon -> ShapeKind.POLYGON to c.pts().map(::pt)
+            is XCurve -> ShapeKind.CURVE to c.segs().flatMap { seg ->
+                listOf(Pt((seg.x1() ?: 0).toDouble(), (seg.y1() ?: 0).toDouble()), Pt((seg.x2() ?: 0).toDouble(), (seg.y2() ?: 0).toDouble()))
+            }.distinct()
+            is Container -> ShapeKind.CONTAINER to emptyList()
+            is Picture -> ShapeKind.PICTURE to listOf(Pt(0.0, 0.0), Pt((c.orgSz()?.width() ?: 0L).toDouble(), (c.orgSz()?.height() ?: 0L).toDouble()))
+            else -> return null
+        }
+        val drawing = c as? DrawingObject<*>
+        val lineShape = drawing?.lineShape()
+        val drawText = drawing?.drawText()
+        val margin = drawText?.textMargin()
+        return ShapeObject(
+            kind = kind,
+            width = c.sz()?.width()?.toInt() ?: c.curSz()?.width()?.toInt() ?: 0,
+            height = c.sz()?.height()?.toInt() ?: c.curSz()?.height()?.toInt() ?: 0,
+            placement = c.toPlacement(),
+            transform = c.renderingInfo().toAffine(),
+            points = points,
+            stroke = lineShape?.takeIf { it.style() != null && it.style() != LineType2.NONE }?.let {
+                Stroke(parseColor(it.color()) ?: CharShape.BLACK, it.width() ?: 0, it.style().toBorderStyle())
+            },
+            fill = drawing?.fillBrush()?.winBrush()?.faceColor()?.let(::parseColor),
+            roundRatio = (c as? XRectangle)?.ratio()?.toInt() ?: 0,
+            arcKind = when ((c as? XArc)?.type()?.name) {
+                "PIE" -> ArcKind.PIE
+                "CHORD" -> ArcKind.CHORD
+                else -> ArcKind.ARC
+            },
+            text = drawText?.subList()?.let { sub ->
+                TextBox(
+                    paragraphs = convertParagraphs(sub),
+                    marginLeft = margin?.left()?.toInt() ?: 0, marginRight = margin?.right()?.toInt() ?: 0,
+                    marginTop = margin?.top()?.toInt() ?: 0, marginBottom = margin?.bottom()?.toInt() ?: 0,
+                    vertAlign = when (sub.vertAlign()) {
+                        VerticalAlign2.CENTER -> VertAlign.CENTER
+                        VerticalAlign2.BOTTOM -> VertAlign.BOTTOM
+                        else -> VertAlign.TOP
+                    },
+                )
+            },
+            children = (c as? Container)?.children()?.mapNotNull { convertShape(it) }.orEmpty(),
+            binId = (c as? Picture)?.img()?.binaryItemIDRef(),
+            originalWidth = c.orgSz()?.width()?.toInt() ?: 0,
+            originalHeight = c.orgSz()?.height()?.toInt() ?: 0,
+        )
+    }
+
+    /** Translation first, then scale/rotation pairs, in file order. */
+    private fun XRenderingInfo?.toAffine(): Affine {
+        val ms = this?.matrices()?.toList().orEmpty()
+        return ms.fold(Affine.IDENTITY) { acc, m ->
+            acc * Affine(
+                (m.e1() ?: 1f).toDouble(), (m.e2() ?: 0f).toDouble(), (m.e3() ?: 0f).toDouble(),
+                (m.e4() ?: 0f).toDouble(), (m.e5() ?: 1f).toDouble(), (m.e6() ?: 0f).toDouble(),
+            )
+        }
+    }
+
+    private fun LineType2?.toBorderStyle(): BorderStyle = when (this) {
+        LineType2.DOT -> BorderStyle.DOT
+        LineType2.DASH -> BorderStyle.DASH
+        LineType2.DASH_DOT -> BorderStyle.DASH_DOT
+        LineType2.DASH_DOT_DOT -> BorderStyle.DASH_DOT_DOT
+        LineType2.LONG_DASH -> BorderStyle.LONG_DASH
+        LineType2.CIRCLE -> BorderStyle.CIRCLE
+        LineType2.DOUBLE_SLIM -> BorderStyle.DOUBLE
+        else -> BorderStyle.SOLID
     }
 
     private fun ApplyPageType?.toModel(): ApplyPage = when (this) {
@@ -278,7 +375,7 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
         )
     }
 
-    private fun ShapeObject<*>.toPlacement(): ObjectPlacement {
+    private fun XShapeObject<*>.toPlacement(): ObjectPlacement {
         val pos = pos()
         val margin = outMargin()
         return ObjectPlacement(
