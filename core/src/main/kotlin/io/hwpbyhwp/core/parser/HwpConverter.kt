@@ -8,6 +8,7 @@ import io.hwpbyhwp.core.model.Document
 import io.hwpbyhwp.core.model.HAlign
 import io.hwpbyhwp.core.model.Inline
 import io.hwpbyhwp.core.model.LineBreak
+import io.hwpbyhwp.core.model.LineSeg
 import io.hwpbyhwp.core.model.LineSpacingType
 import io.hwpbyhwp.core.model.ObjectPlacement
 import io.hwpbyhwp.core.model.PageSetup
@@ -110,12 +111,18 @@ internal class HwpConverter(private val hwp: HWPFile) {
         var shapeIndex = 0
         var currentShape = shapeChanges.firstOrNull()?.second ?: 0
         val text = StringBuilder()
+        var textStart = 0
 
         fun flushText() {
             if (text.isNotEmpty()) {
-                inlines += TextRun(text.toString(), currentShape)
+                inlines += TextRun(text.toString(), currentShape, textStart)
                 text.clear()
             }
+        }
+
+        fun appendText(s: String) {
+            if (text.isEmpty()) textStart = position
+            text.append(s)
         }
 
         for (ch in p.text?.charList.orEmpty()) {
@@ -125,19 +132,19 @@ internal class HwpConverter(private val hwp: HWPFile) {
                 currentShape = shapeChanges[shapeIndex].second
             }
             when (ch.type) {
-                HWPCharType.Normal -> text.append((ch as HWPCharNormal).ch)
+                HWPCharType.Normal -> appendText((ch as HWPCharNormal).ch)
                 HWPCharType.ControlChar -> when (ch.code) {
-                    10 -> { flushText(); inlines += LineBreak(currentShape) }
-                    24 -> text.append('-')
-                    30 -> text.append(' ')
-                    31 -> text.append(' ')
+                    10 -> { flushText(); inlines += LineBreak(currentShape, position) }
+                    24 -> appendText("-")
+                    30 -> appendText("\u00A0")
+                    31 -> appendText(" ")
                     else -> Unit // 13 = paragraph end
                 }
-                HWPCharType.ControlInline -> if (ch.code == 9) { flushText(); inlines += Tab(currentShape) }
+                HWPCharType.ControlInline -> if (ch.code == 9) { flushText(); inlines += Tab(currentShape, position) }
                 HWPCharType.ControlExtend -> {
                     // Extended control characters map one-to-one, in order, onto the paragraph's control list.
                     val control = controls.getOrNull(controlIndex++)
-                    convertControl(control)?.let { flushText(); inlines += it }
+                    convertControl(control, position)?.let { flushText(); inlines += it }
                 }
                 else -> Unit
             }
@@ -151,13 +158,23 @@ internal class HwpConverter(private val hwp: HWPFile) {
             inlines = inlines,
             pageBreakBefore = divide.isDividePage,
             columnBreakBefore = divide.isDivideColumn,
+            lineSegs = p.lineSeg?.lineSegItemList.orEmpty().map {
+                LineSeg(
+                    textStart = it.textStartPosition.toInt(), vertPos = it.lineVerticalPosition,
+                    height = it.lineHeight, textHeight = it.textPartHeight,
+                    baseline = it.distanceBaseLineToLineVerticalPosition, spacing = it.lineSpace,
+                    horzPos = it.startPositionFromColumn, width = it.segmentWidth, flags = it.tag.value.toInt(),
+                )
+            },
+            length = position,
         )
     }
 
-    private fun convertControl(control: Control?): Inline? = when {
+    private fun convertControl(control: Control?, position: Int): Inline? = when {
         control == null -> null
-        control.type == ControlType.Table -> convertTable(control as ControlTable)
-        control is GsoControl && control.gsoType == GsoControlType.Picture -> convertPicture(control as ControlPicture)
+        control.type == ControlType.Table -> convertTable(control as ControlTable).copy(start = position)
+        control is GsoControl && control.gsoType == GsoControlType.Picture ->
+            convertPicture(control as ControlPicture).copy(start = position)
         else -> null
     }
 

@@ -8,6 +8,7 @@ import io.hwpbyhwp.core.model.Document
 import io.hwpbyhwp.core.model.HAlign
 import io.hwpbyhwp.core.model.Inline
 import io.hwpbyhwp.core.model.LineBreak
+import io.hwpbyhwp.core.model.LineSeg
 import io.hwpbyhwp.core.model.LineSpacingType
 import io.hwpbyhwp.core.model.ObjectPlacement
 import io.hwpbyhwp.core.model.PageSetup
@@ -45,6 +46,7 @@ import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.PageDirection
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.TextWrapMethod
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.VertRelTo
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.enumtype.VerticalAlign2
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.Ctrl
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.Para
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.T
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Picture
@@ -55,6 +57,7 @@ import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.FWSpace
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.Hyphen
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.NBSpace
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.NormalText
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.TitleMark
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.LineBreak as XLineBreak
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.t.Tab as XTab
 
@@ -93,21 +96,29 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
 
     private fun loadBinaries(): Map<String, ByteArray> =
         hwpx.contentHPFFile()?.manifest()?.items()?.toList().orEmpty()
-            .filter { it.hasAttachedFile() }
-            .associate { it.id() to BinaryData.decode(it.attachedFile().data()) }
+            .mapNotNull { item ->
+                val data = item.attachedFile()?.data() ?: return@mapNotNull null
+                item.id() to BinaryData.decode(data)
+            }
+            .toMap()
 
     private fun convertParagraphs(list: ParaListCore): List<Paragraph> = list.paras().map(::convertParagraph)
 
     private fun convertParagraph(para: Para): Paragraph {
         val inlines = mutableListOf<Inline>()
+        // Positions follow binary HWP so that line segments (textpos) line up: characters count 1,
+        // controls and objects 8, line breaks 1.
+        var position = 0
         for (run in para.runs()) {
             val shape = run.charPrIDRef().toIntId()
+            if (run.secPr() != null) position += CONTROL_SIZE
             for (item in run.runItems()) {
                 when (item) {
-                    is T -> convertText(item, item.charPrIDRef()?.toIntId() ?: shape, inlines)
-                    is Table -> inlines += convertTable(item)
-                    is Picture -> convertPicture(item)?.let { inlines += it }
-                    else -> Unit // header/footer, fields, shapes: later phases
+                    is T -> position = convertText(item, item.charPrIDRef()?.toIntId() ?: shape, position, inlines)
+                    is Table -> { inlines += convertTable(item).copy(start = position); position += CONTROL_SIZE }
+                    is Picture -> { convertPicture(item)?.let { inlines += it.copy(start = position) }; position += CONTROL_SIZE }
+                    is Ctrl -> position += CONTROL_SIZE * item.countOfCtrlItems()
+                    else -> position += CONTROL_SIZE // other drawing objects, equations, form controls
                 }
             }
         }
@@ -116,30 +127,51 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             inlines = inlines,
             pageBreakBefore = para.pageBreak() == true,
             columnBreakBefore = para.columnBreak() == true,
+            lineSegs = para.lineSegArray()?.items()?.map {
+                LineSeg(
+                    textStart = it.textpos() ?: 0, vertPos = it.vertpos() ?: 0,
+                    height = it.vertsize() ?: 0, textHeight = it.textheight() ?: 0,
+                    baseline = it.baseline() ?: 0, spacing = it.spacing() ?: 0,
+                    horzPos = it.horzpos() ?: 0, width = it.horzsize() ?: 0, flags = it.flags() ?: 0,
+                )
+            }.orEmpty(),
+            // Binary HWP counts the paragraph-end character too.
+            length = position + 1,
         )
     }
 
-    private fun convertText(t: T, shape: Int, out: MutableList<Inline>) {
+    /** Appends the text item's inlines and returns the position after it. */
+    private fun convertText(t: T, shape: Int, startPos: Int, out: MutableList<Inline>): Int {
+        var position = startPos
         if (t.isOnlyText) {
-            t.onlyText()?.takeIf { it.isNotEmpty() }?.let { out += TextRun(it, shape) }
-            return
+            val s = t.onlyText().orEmpty()
+            if (s.isNotEmpty()) out += TextRun(s, shape, position)
+            return position + s.length
         }
         val text = StringBuilder()
+        var textStart = position
         fun flush() {
-            if (text.isNotEmpty()) { out += TextRun(text.toString(), shape); text.clear() }
+            if (text.isNotEmpty()) { out += TextRun(text.toString(), shape, textStart); text.clear() }
         }
-        for (item in t.items() ?: return) {
+        fun append(s: String) {
+            if (text.isEmpty()) textStart = position
+            text.append(s)
+            position += s.length
+        }
+        for (item in t.items() ?: return position) {
             when (item) {
-                is NormalText -> text.append(item.text().orEmpty())
-                is XTab -> { flush(); out += Tab(shape) }
-                is XLineBreak -> { flush(); out += LineBreak(shape) }
-                is NBSpace -> text.append(' ')
-                is FWSpace -> text.append(' ')
-                is Hyphen -> text.append('-')
-                else -> Unit // track-change and markpen markers
+                is NormalText -> append(item.text().orEmpty())
+                is XTab -> { flush(); out += Tab(shape, position); position += CONTROL_SIZE }
+                is XLineBreak -> { flush(); out += LineBreak(shape, position); position += 1 }
+                is NBSpace -> append("\u00A0")
+                is FWSpace -> append(" ")
+                is Hyphen -> append("-")
+                is TitleMark -> position += CONTROL_SIZE
+                else -> Unit // track-change and markpen markers occupy no characters
             }
         }
         flush()
+        return position
     }
 
     private fun convertTable(table: Table): TableObject {
@@ -372,6 +404,7 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
 
     companion object {
         private const val WHITE = 0xFFFFFFFF.toInt()
+        private const val CONTROL_SIZE = 8
         private const val HWP_UNIT_CHAR = "HwpUnitChar"
 
         /** Parses "#RRGGBB" / "#AARRGGBB"; "none" and blanks mean no colour. */

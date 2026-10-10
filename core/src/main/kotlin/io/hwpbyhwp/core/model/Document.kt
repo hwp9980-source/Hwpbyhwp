@@ -77,13 +77,45 @@ data class Paragraph(
     val inlines: List<Inline>,
     val pageBreakBefore: Boolean = false,
     val columnBreakBefore: Boolean = false,
+    /** Line layout Hangul computed when it saved the file; empty if the writer did not store one. */
+    val lineSegs: List<LineSeg> = emptyList(),
+    /** Length of the paragraph in HWP character units (see [Inline.start]). */
+    val length: Int = 0,
 )
 
-sealed interface Inline
+/**
+ * One laid-out line (or line segment) as stored in the file. Vertical positions are relative to the
+ * top of the text area of the page (or cell) the line sits in; horizontal ones to the column start.
+ */
+data class LineSeg(
+    /** Start of the line in HWP character units. */
+    val textStart: Int,
+    val vertPos: Int,
+    val height: Int,
+    val textHeight: Int,
+    /** Distance from the line top to the baseline. */
+    val baseline: Int,
+    val spacing: Int,
+    val horzPos: Int,
+    val width: Int,
+    val flags: Int,
+) {
+    val firstLineOfPage: Boolean get() = flags and 1 != 0
+    val firstLineOfColumn: Boolean get() = flags and 2 != 0
+}
 
-data class TextRun(val text: String, val charShapeId: Int) : Inline
-data class Tab(val charShapeId: Int) : Inline
-data class LineBreak(val charShapeId: Int) : Inline
+sealed interface Inline {
+    /**
+     * Offset within the paragraph in HWP character units: an ordinary character counts 1,
+     * a control (tab, table, picture, section definition, field...) counts 8, a line break 1.
+     * Line segments refer to text by these offsets.
+     */
+    val start: Int
+}
+
+data class TextRun(val text: String, val charShapeId: Int, override val start: Int = 0) : Inline
+data class Tab(val charShapeId: Int, override val start: Int = 0) : Inline
+data class LineBreak(val charShapeId: Int, override val start: Int = 0) : Inline
 
 /** How an object sits relative to the text around it. */
 data class ObjectPlacement(
@@ -118,6 +150,7 @@ data class TableObject(
     val cells: List<TableCell>,
     /** Repeat the first row(s) marked as header on every page the table spans. */
     val repeatHeader: Boolean = false,
+    override val start: Int = 0,
 ) : Inline
 
 data class TableCell(
@@ -144,6 +177,7 @@ data class PictureObject(
     val width: Int,
     val height: Int,
     val placement: ObjectPlacement,
+    override val start: Int = 0,
 ) : Inline
 
 data class CharShape(
