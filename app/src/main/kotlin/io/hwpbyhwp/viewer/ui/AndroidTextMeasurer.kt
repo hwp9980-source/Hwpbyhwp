@@ -1,26 +1,43 @@
 package io.hwpbyhwp.viewer.ui
 
+import android.content.Context
+import android.content.res.AssetManager
 import android.graphics.Paint
 import android.graphics.Typeface
 import io.hwpbyhwp.core.layout.FontSpec
+import io.hwpbyhwp.core.layout.GenericFamily
+import io.hwpbyhwp.core.layout.genericFamilyOf
 import io.hwpbyhwp.core.layout.TextMeasurer
 
-/** Typeface lookup shared by measuring and drawing so both agree on glyph widths. */
+/**
+ * Typeface lookup shared by measuring and drawing so both agree on glyph widths.
+ * Document fonts are substituted by the bundled Noto Sans/Serif KR (assets/fonts, SIL OFL 1.1).
+ */
 object Fonts {
-    private val cache = HashMap<Pair<String, Int>, Typeface>()
+    private lateinit var assets: AssetManager
+    private val cache = HashMap<Pair<GenericFamily, Int>, Typeface>()
 
-    fun typeface(spec: FontSpec): Typeface {
-        val style = (if (spec.bold) Typeface.BOLD else 0) or (if (spec.italic) Typeface.ITALIC else 0)
-        return synchronized(cache) {
-            cache.getOrPut(spec.name to style) { Typeface.create(family(spec.name), style) }
-        }
+    fun init(context: Context) {
+        assets = context.applicationContext.assets
     }
 
-    /** Until Hangul fonts are bundled, map families onto the closest system generic. */
-    private fun family(name: String): Typeface = when {
-        listOf("바탕", "명조", "Batang", "Myeongjo", "Times", "Serif").any { name.contains(it, ignoreCase = true) } -> Typeface.SERIF
-        listOf("Courier", "Mono", "Consolas").any { name.contains(it, ignoreCase = true) } -> Typeface.MONOSPACE
-        else -> Typeface.SANS_SERIF
+    fun typeface(spec: FontSpec): Typeface {
+        val family = genericFamilyOf(spec.name)
+        val style = (if (spec.bold) Typeface.BOLD else 0) or (if (spec.italic) Typeface.ITALIC else 0)
+        return synchronized(cache) { cache.getOrPut(family to style) { load(family, style) } }
+    }
+
+    private fun load(family: GenericFamily, style: Int): Typeface {
+        val bold = style and Typeface.BOLD != 0
+        val file = when (family) {
+            GenericFamily.SANS -> if (bold) "NotoSansKR-Bold.otf" else "NotoSansKR-Regular.otf"
+            GenericFamily.SERIF -> if (bold) "NotoSerifKR-Bold.otf" else "NotoSerifKR-Regular.otf"
+            GenericFamily.MONO -> null
+        }
+        val base = file?.let { runCatching { Typeface.createFromAsset(assets, "fonts/$it") }.getOrNull() }
+            ?: return Typeface.create(Typeface.MONOSPACE, style)
+        // Bold comes from its own file; only italic needs synthesising.
+        return if (style and Typeface.ITALIC != 0) Typeface.create(base, Typeface.ITALIC) else base
     }
 }
 

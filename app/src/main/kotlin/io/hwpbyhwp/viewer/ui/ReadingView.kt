@@ -36,6 +36,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.Typeface
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -47,7 +48,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.hwpbyhwp.core.layout.FontSpec
+import io.hwpbyhwp.core.layout.GenericFamily
 import io.hwpbyhwp.core.layout.TableGrid
+import io.hwpbyhwp.core.layout.genericFamilyOf
 import io.hwpbyhwp.core.model.Border
 import io.hwpbyhwp.core.model.BorderStyle
 import io.hwpbyhwp.core.model.CharShape
@@ -229,11 +233,19 @@ private fun CharShape.toSpanStyle(scale: HwpScale): SpanStyle {
     )
 }
 
-/** Until Hangul fonts are bundled, map families onto the closest system generic. */
-private fun fontFamilyFor(name: String): FontFamily = when {
-    listOf("바탕", "명조", "Batang", "Myeongjo", "Times", "Serif").any { name.contains(it, ignoreCase = true) } -> FontFamily.Serif
-    listOf("Courier", "Mono", "Consolas").any { name.contains(it, ignoreCase = true) } -> FontFamily.Monospace
-    else -> FontFamily.SansSerif
+private val fontFamilies = HashMap<GenericFamily, FontFamily>()
+
+/** Same substitution as page mode: bundled Noto Sans/Serif KR. */
+private fun fontFamilyFor(name: String): FontFamily {
+    val generic = genericFamilyOf(name)
+    return fontFamilies.getOrPut(generic) {
+        when (generic) {
+            GenericFamily.MONO -> FontFamily.Monospace
+            else -> FontFamily(
+                Typeface(Fonts.typeface(FontSpec(name, 1000f, bold = false, italic = false, script = Script.HANGUL))),
+            )
+        }
+    }
 }
 
 @Composable

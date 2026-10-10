@@ -10,6 +10,7 @@ import io.hwpbyhwp.core.layout.PageLayouter
 import io.hwpbyhwp.core.model.Document
 import io.hwpbyhwp.core.parser.DocumentLoader
 import io.hwpbyhwp.viewer.ui.AndroidTextMeasurer
+import io.hwpbyhwp.viewer.ui.Fonts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +30,10 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
     val state: StateFlow<ViewerState> = _state
 
     private var currentUri: Uri? = null
+
+    init {
+        Fonts.init(application)
+    }
 
     fun open(uri: Uri) {
         if (uri == currentUri && _state.value !is ViewerState.Failed) return

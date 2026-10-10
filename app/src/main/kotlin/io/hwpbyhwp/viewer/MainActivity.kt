@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.hwpbyhwp.viewer.ui.Fonts
 import io.hwpbyhwp.viewer.ui.PageView
 import io.hwpbyhwp.viewer.ui.ReadingView
 
@@ -42,6 +43,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Fonts.init(this)
         enableEdgeToEdge()
         intent?.documentUri()?.let(viewModel::open)
         setContent {

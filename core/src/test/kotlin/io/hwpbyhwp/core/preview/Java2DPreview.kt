@@ -1,6 +1,8 @@
 package io.hwpbyhwp.core.preview
 
 import io.hwpbyhwp.core.layout.FontSpec
+import io.hwpbyhwp.core.layout.GenericFamily
+import io.hwpbyhwp.core.layout.genericFamilyOf
 import io.hwpbyhwp.core.layout.ImageItem
 import io.hwpbyhwp.core.layout.LineItem
 import io.hwpbyhwp.core.layout.Page
@@ -11,7 +13,6 @@ import io.hwpbyhwp.core.model.BorderStyle
 import java.awt.BasicStroke
 import java.awt.Color
 import java.awt.Font
-import java.awt.GraphicsEnvironment
 import java.awt.RenderingHints
 import java.awt.font.FontRenderContext
 import java.awt.geom.AffineTransform
@@ -26,14 +27,22 @@ import javax.imageio.ImageIO
 object Java2DPreview {
 
     private val frc = FontRenderContext(null, true, true)
-    private val families = GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames.toSet()
-    private val fallback = listOf("Noto Sans CJK KR", "NanumGothic", "WenQuanYi Zen Hei", "Dialog").first { it in families || it == "Dialog" }
+    /** The app's bundled substitutes, so previews measure like the device does. */
+    private val fontDir = File(System.getenv("HWP_FONTS_DIR") ?: "../app/src/main/assets/fonts")
+    private val loaded = HashMap<String, Font>()
+
+    private fun base(file: String): Font = loaded.getOrPut(file) {
+        runCatching { Font.createFont(Font.TRUETYPE_FONT, File(fontDir, file)) }.getOrElse { Font("Dialog", Font.PLAIN, 1) }
+    }
 
     private fun awtFont(spec: FontSpec): Font {
-        val family = if (spec.name in families) spec.name else fallback
-        val style = (if (spec.bold) Font.BOLD else 0) or (if (spec.italic) Font.ITALIC else 0)
-        // 1 pt = 100 HWPUNIT; work in HWPUNIT directly by using size in HWPUNIT.
-        return Font(family, style, 1).deriveFont(spec.size)
+        val font = when (genericFamilyOf(spec.name)) {
+            GenericFamily.SERIF -> base(if (spec.bold) "NotoSerifKR-Bold.otf" else "NotoSerifKR-Regular.otf")
+            GenericFamily.SANS -> base(if (spec.bold) "NotoSansKR-Bold.otf" else "NotoSansKR-Regular.otf")
+            GenericFamily.MONO -> Font(Font.MONOSPACED, if (spec.bold) Font.BOLD else Font.PLAIN, 1)
+        }
+        // Sizes are in HWPUNIT; the page transform scales them down.
+        return font.deriveFont(if (spec.italic) Font.ITALIC else Font.PLAIN, spec.size)
     }
 
     val measurer = TextMeasurer { text, font ->
