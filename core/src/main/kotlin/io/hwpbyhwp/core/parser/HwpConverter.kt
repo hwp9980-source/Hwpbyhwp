@@ -326,11 +326,16 @@ internal class HwpConverter(private val hwp: HWPFile) {
         val cells = t.rowList.flatMap { row ->
             row.cellList.map { cell ->
                 val h = cell.listHeader
+                val ownMargin = h.property.isApplyInnerMagin
                 TableCell(
                     row = h.rowIndex, col = h.colIndex, rowSpan = h.rowSpan, colSpan = h.colSpan,
                     width = h.width.toInt(), height = h.height.toInt(),
-                    marginLeft = h.leftMargin, marginRight = h.rightMargin,
-                    marginTop = h.topMargin, marginBottom = h.bottomMargin,
+                    // Cells without their own margins (안쪽 여백 지정 off) use the table's; their
+                    // stored values are then meaningless (often 0xFFFF).
+                    marginLeft = if (ownMargin) h.leftMargin else table.leftInnerMargin,
+                    marginRight = if (ownMargin) h.rightMargin else table.rightInnerMargin,
+                    marginTop = if (ownMargin) h.topMargin else table.topInnerMargin,
+                    marginBottom = if (ownMargin) h.bottomMargin else table.bottomInnerMargin,
                     borderFillId = h.borderFillId,
                     vertAlign = when (h.property.textVerticalAlignment) {
                         TextVerticalAlignment.Center -> VertAlign.CENTER

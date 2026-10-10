@@ -40,4 +40,12 @@ class TableGridTest {
         val g = TableGrid.of(table(2, 2, *cells.toTypedArray())).withContentHeights(cells, intArrayOf(15, 50, 5))
         assertContentEquals(intArrayOf(15, 35), g.rowHeights)
     }
+
+    @Test
+    fun columnsFollowCellBoundariesWhenSpansOverlap() {
+        // Row 0: 100 | 300 (2 cols). Row 1: 250 (2 cols) | 150. Boundaries 0,100,250,400.
+        val g = TableGrid.of(table(2, 3, cell(0, 0, 100, 10), cell(0, 1, 300, 10, cs = 2), cell(1, 0, 250, 10, cs = 2), cell(1, 2, 150, 10)))
+        assertContentEquals(intArrayOf(100, 150, 150), g.colWidths)
+        assertEquals(400, g.width)
+    }
 }

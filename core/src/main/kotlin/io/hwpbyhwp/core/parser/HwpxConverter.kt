@@ -396,6 +396,7 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
         val cells = table.trs().flatMap { tr ->
             tr.tcs().map { tc ->
                 val sub = tc.subList()
+                val margins = if (tc.hasMargin() == true) tc.cellMargin() else null
                 TableCell(
                     row = tc.cellAddr()?.rowAddr()?.toInt() ?: 0,
                     col = tc.cellAddr()?.colAddr()?.toInt() ?: 0,
@@ -403,10 +404,11 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
                     colSpan = tc.cellSpan()?.colSpan()?.toInt() ?: 1,
                     width = tc.cellSz()?.width()?.toInt() ?: 0,
                     height = tc.cellSz()?.height()?.toInt() ?: 0,
-                    marginLeft = (tc.cellMargin()?.left() ?: table.inMargin()?.left())?.toInt() ?: 0,
-                    marginRight = (tc.cellMargin()?.right() ?: table.inMargin()?.right())?.toInt() ?: 0,
-                    marginTop = (tc.cellMargin()?.top() ?: table.inMargin()?.top())?.toInt() ?: 0,
-                    marginBottom = (tc.cellMargin()?.bottom() ?: table.inMargin()?.bottom())?.toInt() ?: 0,
+                    // Cells use their own margins only when hasMargin is set; otherwise the table's.
+                    marginLeft = (margins?.left() ?: table.inMargin()?.left())?.toInt() ?: 0,
+                    marginRight = (margins?.right() ?: table.inMargin()?.right())?.toInt() ?: 0,
+                    marginTop = (margins?.top() ?: table.inMargin()?.top())?.toInt() ?: 0,
+                    marginBottom = (margins?.bottom() ?: table.inMargin()?.bottom())?.toInt() ?: 0,
                     borderFillId = tc.borderFillIDRef().toIntId(),
                     vertAlign = when (sub?.vertAlign()) {
                         VerticalAlign2.CENTER -> VertAlign.CENTER

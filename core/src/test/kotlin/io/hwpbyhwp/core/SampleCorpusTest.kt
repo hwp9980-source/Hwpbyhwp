@@ -52,12 +52,12 @@ class SampleCorpusTest {
                 // text characters plus the paragraph end must account for the whole length.
                 val textLength = p.inlines.sumOf { (it as? TextRun)?.text?.length ?: return }
                 if (textLength + 1 != p.length) return
-                val margin = doc.paraShape(p.paraShapeId).marginLeft.coerceAtLeast(0)
+                val margin = doc.paraShape(p.paraShapeId).marginLeft
                 checked++
                 // A floating object in a neighbouring paragraph may push a line right, never left;
                 // a factor of two means a unit conversion went wrong.
                 val h = seg.horzPos
-                val wrong = h < margin - 4 || (margin > 4 && (abs(h * 2 - margin) <= 4 || abs(h - margin * 2) <= 4))
+                val wrong = h < margin - 4 || (abs(margin) > 4 && (abs(h * 2 - margin) <= 4 || abs(h - margin * 2) <= 4))
                 if (wrong) mismatches += "${f.name}: margin=$margin horzPos=$h"
             }
             doc.sections.forEach { s -> s.paragraphs.forEach(::visit) }

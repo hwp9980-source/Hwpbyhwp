@@ -398,7 +398,7 @@ class PageLayouter(
 
         /** Places a table, continuing its rows on following pages when it runs past the body bottom. */
         private fun placeTableOnPage(table: TableObject, x: Float, top: Float) {
-            val grid = TableGrid.of(table)
+            val grid = gridFor(table)
             val headerRows = if (table.repeatHeader) table.cells.filter { it.isHeader }.maxOfOrNull { it.row + it.rowSpan } ?: 0 else 0
             var rowStart = 0
             var y = top
@@ -752,6 +752,21 @@ class PageLayouter(
         }
     }
 
+    /**
+     * Row heights from the stored cell sizes, grown where a cell's text needs more room: Hangul
+     * enlarges rows to fit their content, and some writers store stale (smaller) cell heights.
+     */
+    private fun gridFor(table: TableObject): TableGrid {
+        val base = TableGrid.of(table)
+        val needed = IntArray(table.cells.size) { i ->
+            val cell = table.cells[i]
+            val width = (base.cellWidth(cell) - cell.marginLeft - cell.marginRight).toFloat()
+            val content = frameSegments(cell.paragraphs, width).flatMap { it.second }.maxOfOrNull { it.vertPos + it.height } ?: 0
+            if (content == 0) 0 else content + cell.marginTop + cell.marginBottom
+        }
+        return base.withContentHeights(table.cells, needed)
+    }
+
     private fun placeCellContent(cell: TableCell, cx: Float, cy: Float, w: Float, h: Float, out: MutableList<PageItem>) {
         val innerWidth = w - cell.marginLeft - cell.marginRight
         val frame = frameSegments(cell.paragraphs, innerWidth)
@@ -796,7 +811,9 @@ class PageLayouter(
             val shape = document.paraShape(p.paraShapeId)
             val head = if (index == 0 && firstHead != null) firstHead else headOf(p)
             segs.forEachIndexed { i, seg ->
-                val s = if (seg.width <= 0) seg.copy(width = (width - seg.horzPos - shape.marginRight).toInt()) else seg
+                // Never wider than the box: stored widths can be stale when a writer resized cells.
+                val fit = (width - seg.horzPos - shape.marginRight.coerceAtLeast(0)).toInt()
+                val s = if (seg.width <= 0 || seg.width > fit) seg.copy(width = fit) else seg
                 placeLine(p, shape, s, isFirst = i == 0, isLast = i == segs.lastIndex, end = segs.getOrNull(i + 1)?.textStart ?: Int.MAX_VALUE,
                     left = left, top = top, out = out, inlineObject = { obj, ox, oy -> placeNested(obj, ox, oy, out) },
                     head = head.takeIf { i == 0 })
@@ -811,7 +828,7 @@ class PageLayouter(
     private fun placeNested(obj: Inline, x: Float, y: Float, out: MutableList<PageItem>) {
         when (obj) {
             is TableObject -> {
-                val grid = TableGrid.of(obj)
+                val grid = gridFor(obj)
                 drawTableRows(obj, grid, 0 until grid.rowHeights.size, x, y, out)
             }
             is PictureObject -> out += ImageItem(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat())

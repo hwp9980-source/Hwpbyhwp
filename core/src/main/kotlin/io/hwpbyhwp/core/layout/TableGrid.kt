@@ -43,9 +43,33 @@ class TableGrid private constructor(
             val cols = maxOf(table.colCount, table.cells.maxOfOrNull { it.col + it.colSpan } ?: 0)
             val rows = maxOf(table.rowCount, table.cells.maxOfOrNull { it.row + it.rowSpan } ?: 0)
             return TableGrid(
-                solve(cols, table.cells.map { Triple(it.col, it.colSpan, it.width) }),
-                solve(rows, table.cells.map { Triple(it.row, it.rowSpan, it.height) }),
+                boundaries(cols, table.cells.sortedWith(compareBy({ it.row }, { it.col })).map { Triple(it.col, it.colSpan, it.width) })
+                    ?: solve(cols, table.cells.map { Triple(it.col, it.colSpan, it.width) }),
+                boundaries(rows, table.cells.sortedWith(compareBy({ it.col }, { it.row })).map { Triple(it.row, it.rowSpan, it.height) })
+                    ?: solve(rows, table.cells.map { Triple(it.row, it.rowSpan, it.height) }),
             )
+        }
+
+        /**
+         * Track sizes from boundary positions: walking cells in reading order, each cell starts where
+         * an earlier cell (in its row, or a spanning one above) ended, so the cell sizes accumulate
+         * exactly as Hangul drew them. Returns null when some boundary is never reached.
+         */
+        private fun boundaries(n: Int, spans: List<Triple<Int, Int, Int>>): IntArray? {
+            if (n == 0) return IntArray(0)
+            val pos = arrayOfNulls<Int>(n + 1)
+            pos[0] = 0
+            repeat(2) { // a second pass picks up cells whose start was only known later
+                for ((start, count, size) in spans) {
+                    if (start > n) continue
+                    val x = pos[start] ?: continue
+                    val end = (start + count).coerceAtMost(n)
+                    if (pos[end] == null) pos[end] = x + size
+                }
+            }
+            if (pos.any { it == null }) return null
+            val sizes = IntArray(n) { pos[it + 1]!! - pos[it]!! }
+            return if (sizes.all { it >= 0 }) sizes else null
         }
 
         /** Splits spans (start, count, size) into per-track sizes. */
