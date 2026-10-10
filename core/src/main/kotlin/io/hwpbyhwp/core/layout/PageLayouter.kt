@@ -136,6 +136,8 @@ class PageLayouter(
         private var lastVertPos: Int? = null
         /** Counts page breaks, so a table can tell whether it ran onto later pages. */
         private var pageSerial = 0
+        /** Added to stored line positions for the rest of this page, where our layout ran longer than Hangul's. */
+        private var shift = 0
         /** [lastVertPos] is the bottom of a table that ran on from earlier pages, measured by us, not stored. */
         private var afterTableTail = false
         /** Running vertical position for paragraphs that carry no stored segments. */
@@ -204,6 +206,7 @@ class PageLayouter(
             pageHasLines = false
             lastVertPos = null
             afterTableTail = false
+            shift = 0
             columnIndex = 0
             occupied.clear()
             hide = null
@@ -337,27 +340,36 @@ class PageLayouter(
                 chunkTop = null
                 chunkIsFirst = false
             }
-            segs.forEachIndexed { i, seg ->
+            segs.forEachIndexed { i, raw ->
                 // Hangul flags the first line of each page. Within a page, a stored vertical position that
                 // jumps back up means the text moved on to the next column (or, past the last one, a new page).
                 val jumpedBack = lastVertPos?.let {
                     // Our height for a page-spanning table can exceed Hangul's, so after one only a
                     // clear jump towards the top counts; a small one is the text right below the table.
-                    if (afterTableTail) seg.vertPos < it / 2 else seg.vertPos < it - PAGE_TOLERANCE
+                    if (afterTableTail) raw.vertPos < it / 2 else raw.vertPos < it - PAGE_TOLERANCE
                 } == true
+                val tableTail = if (afterTableTail) lastVertPos else null
                 afterTableTail = false
                 // A floating table already fills the column where this paragraph would start: Hangul
-                // would have pushed the text below it, so a position on top of it means the next column.
-                val blocked = i == 0 && occupied.any { it.first == columnIndex && it.second > bodyTop + seg.vertPos + PAGE_TOLERANCE }
-                val moves = pageHasLines && (seg.firstLineOfPage || jumpedBack || blocked)
+                // would have pushed the text below it, so a position well inside it means the next column.
+                // (Only well inside: stored table heights can be stale and reach past the text below.)
+                val blocked = i == 0 && occupied.any { it.first == columnIndex && bodyTop + raw.vertPos < bodyTop + (it.second - bodyTop) / 2 }
+                val moves = (pageHasLines && (raw.firstLineOfPage || jumpedBack)) || blocked
                 if (moves) {
                     flushBorder(isEnd = false)
-                    if (seg.firstLineOfPage) newPage() else advanceColumn(seg.vertPos)
+                    if (raw.firstLineOfPage) newPage() else advanceColumn(raw.vertPos)
                 }
+                // Text Hangul put right below a table that ran on from earlier pages starts below our
+                // (possibly taller) rendering of the table; the rest of the page moves down with it.
+                if (i == 0 && !moves && tableTail != null && raw.vertPos < tableTail) shift = tableTail - raw.vertPos
+                // Never pushed below the body: there it would overlap the footer instead.
+                val pushed = (raw.vertPos + shift).coerceAtMost(maxOf(raw.vertPos, bodyHeight.toInt() - raw.height))
+                val seg = if (pushed != raw.vertPos) raw.copy(vertPos = pushed) else raw
                 if (i == 0) startsColumn = moves || !pageHasLines
-                lastVertPos = seg.vertPos
+                lastVertPos = raw.vertPos
                 if (i == 0) applyPageControls(p)
-                if (paraTop == null) { paraTop = bodyTop + seg.vertPos; paraColumn = column }
+                // Floating objects keep Hangul's positions: moving them would push later tables off their pages.
+                if (paraTop == null) { paraTop = bodyTop + raw.vertPos; paraColumn = column }
                 if (chunkTop == null) {
                     chunkStart = items.size
                     chunkTop = bodyTop + seg.vertPos - (if (i == 0 && connectPrev) shape.spaceBefore else 0)
@@ -418,6 +430,7 @@ class PageLayouter(
 
         /** Moves on to the next column (or page), skipping columns a floating table already fills down to [vertPos]. */
         private fun advanceColumn(vertPos: Int) {
+            shift = 0
             do {
                 if (columnIndex + 1 >= columns.size) newPage() else columnIndex++
             } while (occupied.any { it.first == columnIndex && it.second > bodyTop + vertPos + PAGE_TOLERANCE })
@@ -546,38 +559,35 @@ class PageLayouter(
         private fun placeCellBreakingTable(table: TableObject, grid: TableGrid, x: Float, top: Float, headerRows: Int): Float {
             var y = top
             var pageStart = top
+            val continuous by lazy { continuousCells(table).let { it to gridFor(it) } }
             for (band in rowBands(table, grid.rowHeights.size)) {
+                var bandTable = table
+                var bandGrid = grid
                 if (band.any { rowSplitsAcrossPages(table, it) }) {
-                    // Hangul's own line positions say where the cells continue: follow them row by row.
-                    for (row in band) {
-                        if (rowSplitsAcrossPages(table, row)) {
-                            y = placeSplitRow(table, grid, row, x, y, headerRows)
-                        } else {
-                            val h = grid.rowHeights[row]
-                            if (y + h > bodyTop + bodyHeight + PAGE_TOLERANCE && y > bodyTop + PAGE_TOLERANCE) {
-                                newPage()
-                                y = bodyTop + repeatHeader(table, grid, headerRows, x, row)
-                            }
-                            drawTableRows(table, grid, row..row, x, y, items)
-                            y += h
-                        }
+                    if (band.first == band.last) {
+                        // Hangul's own line positions say where the cells continue.
+                        y = placeSplitRow(table, grid, band.first, x, y, headerRows)
                         usedBottom = maxOf(usedBottom, y - bodyTop)
+                        pageStart = Float.NEGATIVE_INFINITY
+                        continue
                     }
-                    pageStart = Float.NEGATIVE_INFINITY
-                    continue
+                    // Merged cells tie the row to others: lay the continued lines out in one run and cut
+                    // the band like any other.
+                    bandTable = continuous.first
+                    bandGrid = continuous.second
                 }
-                val height = (grid.rowY(band.last + 1) - grid.rowY(band.first)).toFloat()
+                val height = (bandGrid.rowY(band.last + 1) - bandGrid.rowY(band.first)).toFloat()
                 var obstacles: List<ClosedFloatingPointRange<Float>>? = null
                 var offset = 0f
                 while (true) {
                     val room = bodyTop + bodyHeight - y
                     if (height - offset <= room + PAGE_TOLERANCE) {
-                        drawBandPiece(table, grid, band, x, y, offset, height - offset, height)
+                        drawBandPiece(bandTable, bandGrid, band, x, y, offset, height - offset, height)
                         y += height - offset
                         usedBottom = maxOf(usedBottom, y - bodyTop)
                         break
                     }
-                    val lines = obstacles ?: bandObstacles(table, grid, band, x).also { obstacles = it }
+                    val lines = obstacles ?: bandObstacles(bandTable, bandGrid, band, x).also { obstacles = it }
                     var cut = cutBetweenLines(lines, offset, offset + room)
                     if (cut <= offset + PAGE_TOLERANCE) {
                         if (y > pageStart + PAGE_TOLERANCE) {
@@ -589,7 +599,7 @@ class PageLayouter(
                         }
                         cut = offset + room // a line taller than the page is cut through
                     }
-                    drawBandPiece(table, grid, band, x, y, offset, cut - offset, height)
+                    drawBandPiece(bandTable, bandGrid, band, x, y, offset, cut - offset, height)
                     newPage()
                     y = bodyTop + repeatHeader(table, grid, headerRows, x, band.first)
                     pageStart = y
@@ -1072,6 +1082,25 @@ class PageLayouter(
         }
     }
 
+    /**
+     * [table] with each cell's lines that Hangul continued on later pages (positions restarting at 0)
+     * moved to follow on from the lines before, as one run.
+     */
+    private fun continuousCells(table: TableObject): TableObject = table.copy(cells = table.cells.map { cell ->
+        if (cellChunks(cell).size < 2) return@map cell
+        var offset = 0
+        var prev: LineSeg? = null
+        cell.copy(paragraphs = cell.paragraphs.map { p ->
+            p.copy(lineSegs = p.lineSegs.map { seg ->
+                val before = prev
+                if (before != null && seg.vertPos < before.vertPos - offset - PAGE_TOLERANCE) {
+                    offset = before.vertPos + before.height + before.spacing.coerceAtLeast(0) - seg.vertPos
+                }
+                seg.copy(vertPos = seg.vertPos + offset).also { prev = it }
+            })
+        })
+    })
+
     /** Consecutive rows that merged cells tie together; a page break can only fall between bands. */
     private fun rowBands(table: TableObject, rows: Int): List<IntRange> {
         val bands = mutableListOf<IntRange>()
@@ -1183,8 +1212,18 @@ class PageLayouter(
     /** Stored segments of each paragraph, or computed ones stacked from the frame top. */
     private fun frameSegments(paragraphs: List<Paragraph>, width: Float): List<Pair<Paragraph, List<LineSeg>>> {
         var cursor = 0f
+        var previous: LineSeg? = null
         return paragraphs.map { p ->
-            val segs = p.lineSegs.ifEmpty {
+            val segs = p.lineSegs.map { seg ->
+                // Some writers store several lines at one position; stack those under the line before.
+                // (A clear jump back up is a page break inside the cell and stays as is.)
+                val prev = previous
+                val fixed = if (prev != null && p.lineSegs.isNotEmpty() && seg.vertPos >= prev.vertPos - PAGE_TOLERANCE && seg.vertPos < prev.vertPos + prev.height / 2) {
+                    seg.copy(vertPos = prev.vertPos + prev.height + prev.spacing.coerceAtLeast(0))
+                } else seg
+                previous = fixed
+                fixed
+            }.ifEmpty {
                 val shape = document.paraShape(p.paraShapeId)
                 var y = cursor + shape.spaceBefore
                 breakLines(p, width).map { line ->

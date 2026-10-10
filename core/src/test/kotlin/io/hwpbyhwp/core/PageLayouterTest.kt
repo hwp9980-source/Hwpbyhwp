@@ -216,6 +216,33 @@ class PageLayouterTest {
     }
 
     @Test
+    fun linesStoredAtOnePositionInACellAreStacked() {
+        // A writer stored both paragraphs of the cell at position 0.
+        val cellParas = listOf(
+            Paragraph(0, listOf(TextRun("top", 0, 0)), lineSegs = listOf(seg(0, 0)), length = 4),
+            Paragraph(0, listOf(TextRun("next", 0, 0)), lineSegs = listOf(seg(0, 0)), length = 5),
+        )
+        val cell = io.hwpbyhwp.core.model.TableCell(0, 0, 1, 1, 40000, 5000, 0, 0, 0, 0, 0, io.hwpbyhwp.core.model.VertAlign.TOP, cellParas)
+        val table = io.hwpbyhwp.core.model.TableObject(1, 1, 40000, 5000, 0, 0, io.hwpbyhwp.core.model.ObjectPlacement.INLINE, listOf(cell))
+        val anchor = Paragraph(0, listOf(table), lineSegs = listOf(seg(0, 0)), length = 9)
+        val texts = PageLayouter(doc(listOf(anchor)), mono).layout().single().items.filterIsInstance<TextItem>()
+        val top = texts.single { it.text == "top" }
+        val next = texts.single { it.text == "next" }
+        assertEquals(top.baseline + 1600, next.baseline)
+    }
+
+    @Test
+    fun textBelowAPageSpanningTableMovesBelowWhereWeEndedIt() {
+        // Hangul ended the box's continuation higher than we do (ours runs to 61000 on page 2);
+        // the paragraph it stored at 40000 goes below our bottom instead of over the box.
+        val after = Paragraph(0, listOf(TextRun("after", 0, 0)), lineSegs = listOf(seg(0, 40000)), length = 6)
+        val pages = PageLayouter(doc(listOf(splitBox(), after)), mono).layout()
+        assertEquals(2, pages.size)
+        val text = pages[1].items.filterIsInstance<TextItem>().single { it.text == "after" }
+        assertTrue(text.baseline >= bodyTop + 61000)
+    }
+
+    @Test
     fun cellTextContinuesOnNextPageWhereLinePositionsRestart() {
         // A one-cell box whose second paragraph Hangul placed on the next page (vertPos back to 0).
         val cellParas = listOf(
