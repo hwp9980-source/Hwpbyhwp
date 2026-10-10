@@ -5,8 +5,11 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import io.hwpbyhwp.core.layout.Page
+import io.hwpbyhwp.core.layout.PageLayouter
 import io.hwpbyhwp.core.model.Document
 import io.hwpbyhwp.core.parser.DocumentLoader
+import io.hwpbyhwp.viewer.ui.AndroidTextMeasurer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -16,7 +19,7 @@ import kotlinx.coroutines.withContext
 sealed interface ViewerState {
     data object Empty : ViewerState
     data class Loading(val name: String) : ViewerState
-    data class Loaded(val name: String, val document: Document) : ViewerState
+    data class Loaded(val name: String, val document: Document, val pages: List<Page>) : ViewerState
     data class Failed(val name: String, val message: String) : ViewerState
 }
 
@@ -40,7 +43,8 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
                         ?: error("파일을 열 수 없습니다")
                     input.use { DocumentLoader.load(it, app.cacheDir) }
                 }
-                ViewerState.Loaded(name, doc)
+                val pages = withContext(Dispatchers.Default) { PageLayouter(doc, AndroidTextMeasurer()).layout() }
+                ViewerState.Loaded(name, doc, pages)
             } catch (e: Exception) {
                 ViewerState.Failed(name, e.message ?: e.javaClass.simpleName)
             }

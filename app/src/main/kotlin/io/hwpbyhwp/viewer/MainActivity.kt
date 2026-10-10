@@ -25,11 +25,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.hwpbyhwp.viewer.ui.PageView
 import io.hwpbyhwp.viewer.ui.ReadingView
 
 class MainActivity : ComponentActivity() {
@@ -70,6 +74,7 @@ private fun ViewerScreen(viewModel: ViewerViewModel) {
         uri?.let(viewModel::open)
     }
     val openFile = { picker.launch(arrayOf("*/*")) }
+    var readingMode by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -83,7 +88,12 @@ private fun ViewerScreen(viewModel: ViewerViewModel) {
                     }
                     Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
-                actions = { TextButton(onClick = openFile) { Text("열기") } },
+                actions = {
+                    if (state is ViewerState.Loaded) {
+                        TextButton(onClick = { readingMode = !readingMode }) { Text(if (readingMode) "쪽 보기" else "읽기 모드") }
+                    }
+                    TextButton(onClick = openFile) { Text("열기") }
+                },
             )
         },
     ) { padding ->
@@ -105,7 +115,9 @@ private fun ViewerScreen(viewModel: ViewerViewModel) {
                     Text(s.message)
                     Button(onClick = openFile) { Text("다른 파일 열기") }
                 }
-                is ViewerState.Loaded -> ReadingView(s.document, Modifier.fillMaxSize())
+                is ViewerState.Loaded ->
+                    if (readingMode) ReadingView(s.document, Modifier.fillMaxSize())
+                    else PageView(s.pages, s.document.binaries, Modifier.fillMaxSize())
             }
         }
     }

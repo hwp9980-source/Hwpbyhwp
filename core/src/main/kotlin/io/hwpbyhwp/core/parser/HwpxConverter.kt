@@ -298,7 +298,8 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
 
     private fun ParaPr.toModel(): ParaShape {
         // Hangul writes margin and line spacing inside <hp:switch>: the HwpUnitChar case holds true
-        // HWPUNIT values, the default branch holds legacy values that are doubled like binary HWP.
+        // HWPUNIT values; the default branch, and plain elements outside any switch, hold legacy
+        // values that are doubled like binary HWP.
         val margin = switched(margin())
         val m = margin?.value
         val mScale = if (margin?.doubled == true) 2 else 1
@@ -365,15 +366,20 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
 
     private class Resolved<T>(val value: T, val doubled: Boolean)
 
-    /** Returns [direct] if present, otherwise the matching child from the object's <hp:switch> blocks. */
+    /**
+     * Prefers the HwpUnitChar case of the object's <hp:switch> blocks, then [direct] or the default
+     * branch, both of which carry legacy doubled values.
+     */
     private inline fun <reified C : HWPXObject> SwitchableObject.switched(direct: C?): Resolved<C>? {
-        if (direct != null) return Resolved(direct, false)
         for (sw in switchList().orEmpty()) {
             for (case in sw.caseObjects() ?: emptyList()) {
                 if (case.requiredNamespace()?.endsWith(HWP_UNIT_CHAR) == true) {
                     case.children()?.filterIsInstance<C>()?.firstOrNull()?.let { return Resolved(it, false) }
                 }
             }
+        }
+        if (direct != null) return Resolved(direct, true)
+        for (sw in switchList().orEmpty()) {
             sw.defaultObject()?.children()?.filterIsInstance<C>()?.firstOrNull()?.let { return Resolved(it, true) }
         }
         return null
