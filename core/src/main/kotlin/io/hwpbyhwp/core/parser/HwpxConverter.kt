@@ -17,6 +17,7 @@ import io.hwpbyhwp.core.model.NumberShape
 import io.hwpbyhwp.core.model.NumberingDef
 import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
+import io.hwpbyhwp.core.model.EquationObject
 import io.hwpbyhwp.core.model.HeaderFooter
 import io.hwpbyhwp.core.model.Note
 import io.hwpbyhwp.core.model.NoteKind
@@ -83,6 +84,7 @@ import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.Para
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.T
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Picture
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Container
+import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Equation
 import kr.dogfoot.hwpxlib.`object`.common.baseobject.Point as XPoint
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Arc as XArc
 import kr.dogfoot.hwpxlib.`object`.content.section_xml.paragraph.`object`.Curve as XCurve
@@ -199,6 +201,18 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
                     is Picture -> { convertPicture(item)?.let { inlines += it.copy(start = position) }; position += CONTROL_SIZE }
                     is Ctrl -> for (ctrl in item.ctrlItems() ?: emptyList()) {
                         convertCtrl(ctrl, shape, position)?.let { inlines += it }
+                        position += CONTROL_SIZE
+                    }
+                    is Equation -> {
+                        inlines += EquationObject(
+                            script = item.script()?.text().orEmpty(),
+                            fontSize = item.baseUnit() ?: 1000,
+                            color = parseColor(item.textColor()) ?: CharShape.BLACK,
+                            width = item.sz()?.width()?.toInt() ?: 0, height = item.sz()?.height()?.toInt() ?: 0,
+                            baselinePercent = item.baseLine() ?: 85,
+                            placement = item.toPlacement(),
+                            start = position,
+                        )
                         position += CONTROL_SIZE
                     }
                     is ShapeComponent<*> -> { convertShape(item)?.let { inlines += it.copy(start = position) }; position += CONTROL_SIZE }

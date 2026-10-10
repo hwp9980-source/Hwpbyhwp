@@ -39,6 +39,7 @@ data class Document(
                 is AutoNumber -> if (inline.kind == AutoNumberKind.PAGE) append('#')
                 is ShapeObject -> inline.text?.paragraphs?.forEach { appendParagraph(it) }
                 is Note -> append(inline.label)
+                is EquationObject -> append(inline.script)
                 is PictureObject, is ColumnDefine, is HeaderFooter, is PageNumberPosition -> Unit
             }
         }
@@ -264,6 +265,21 @@ data class ShapeObject(
     /** Size in the shape's own coordinates (before [transform]). */
     val originalWidth: Int = width,
     val originalHeight: Int = height,
+    override val start: Int = 0,
+) : Inline
+
+/** 수식: Hangul's equation script, typeset at layout time. */
+data class EquationObject(
+    val script: String,
+    /** Base font size in HWPUNIT. */
+    val fontSize: Int,
+    /** ARGB. */
+    val color: Int,
+    val width: Int,
+    val height: Int,
+    /** Baseline position as a percentage of the height, from the top. */
+    val baselinePercent: Int,
+    val placement: ObjectPlacement,
     override val start: Int = 0,
 ) : Inline
 

@@ -17,6 +17,7 @@ import io.hwpbyhwp.core.model.NumberShape
 import io.hwpbyhwp.core.model.NumberingDef
 import io.hwpbyhwp.core.model.NumberingLevel
 import io.hwpbyhwp.core.model.ColumnDefine
+import io.hwpbyhwp.core.model.EquationObject
 import io.hwpbyhwp.core.model.HeaderFooter
 import io.hwpbyhwp.core.model.Note
 import io.hwpbyhwp.core.model.NoteKind
@@ -52,6 +53,7 @@ import kr.dogfoot.hwplib.`object`.bodytext.control.Control
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlAutoNumber
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlColumnDefine
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlEndnote
+import kr.dogfoot.hwplib.`object`.bodytext.control.ControlEquation
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlFootnote
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlFooter
 import kr.dogfoot.hwplib.`object`.bodytext.control.ControlHeader
@@ -302,6 +304,17 @@ internal class HwpConverter(private val hwp: HWPFile) {
             control.paragraphList.paragraphs.orEmpty().map(::convertParagraph), charShape, position,
         )
         control.type == ControlType.Table -> convertTable(control as ControlTable).copy(start = position)
+        control is ControlEquation -> control.eqEdit.let { eq ->
+            EquationObject(
+                script = eq.script?.toUTF16LEString().orEmpty().trimEnd('\u0000'),
+                fontSize = eq.letterSize.toInt().takeIf { it > 0 } ?: 1000,
+                color = eq.letterColor.toArgb(),
+                width = control.header.width.toInt(), height = control.header.height.toInt(),
+                baselinePercent = eq.baseLine.toInt().takeIf { it > 0 } ?: 85,
+                placement = control.header.toPlacement(),
+                start = position,
+            )
+        }
         control is GsoControl && control.gsoType == GsoControlType.Picture ->
             convertPicture(control as ControlPicture).copy(start = position)
         control is GsoControl -> convertShape(control)?.copy(start = position)

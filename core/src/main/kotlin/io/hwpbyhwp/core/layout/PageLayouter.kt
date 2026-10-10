@@ -8,7 +8,10 @@ import io.hwpbyhwp.core.model.AutoNumber
 import io.hwpbyhwp.core.model.AutoNumberKind
 import io.hwpbyhwp.core.model.Border
 import io.hwpbyhwp.core.model.ColumnDefine
+import io.hwpbyhwp.core.model.EquationObject
 import io.hwpbyhwp.core.model.HeaderFooter
+import io.hwpbyhwp.core.layout.equation.EqLayout
+import io.hwpbyhwp.core.layout.equation.EqParser
 import io.hwpbyhwp.core.model.Note
 import io.hwpbyhwp.core.model.NoteKind
 import io.hwpbyhwp.core.model.HeaderFooterKind
@@ -367,6 +370,7 @@ class PageLayouter(
                 is TableObject -> placeTableOnPage(obj, x, top)
                 is PictureObject -> items += ImageItem(obj.binId, x, top, obj.width.toFloat(), obj.height.toFloat())
                 is ShapeObject -> drawShape(obj, x, top, items)
+                is EquationObject -> drawEquation(obj, x, top, items)
                 else -> Unit
             }
         }
@@ -387,6 +391,7 @@ class PageLayouter(
                 is TableObject -> placeTableOnPage(obj, x, y)
                 is PictureObject -> items += ImageItem(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat())
                 is ShapeObject -> drawShape(obj, x, y, items)
+                is EquationObject -> drawEquation(obj, x, y, items)
                 else -> Unit
             }
         }
@@ -467,7 +472,7 @@ class PageLayouter(
                 is LineBreak -> if (inline.start in from until to) {
                     atoms += Atom(inline.start, '\n', document.charShape(inline.charShapeId), Script.LATIN, 0f, isBreak = true)
                 }
-                is TableObject, is PictureObject, is ShapeObject -> if (inline.start in from until to && inline.placement()?.treatAsChar == true) {
+                is TableObject, is PictureObject, is ShapeObject, is EquationObject -> if (inline.start in from until to && inline.placement()?.treatAsChar == true) {
                     val pl = inline.placement()!!
                     val w = inline.objWidth() + pl.marginLeft + pl.marginRight
                     atoms += Atom(inline.start, OBJECT_CHAR, CharShape.DEFAULT, Script.OTHER, w.toFloat(), obj = inline)
@@ -811,8 +816,36 @@ class PageLayouter(
             }
             is PictureObject -> out += ImageItem(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat())
             is ShapeObject -> drawShape(obj, x, y, out)
+            is EquationObject -> drawEquation(obj, x, y, out)
             else -> Unit
         }
+    }
+
+    /**
+     * Typesets an equation into its box at ([x], [top]): the baseline sits where Hangul says, and the
+     * result shrinks to fit when our substitute font sets it wider than Hangul did.
+     */
+    private fun drawEquation(eq: EquationObject, x: Float, top: Float, out: MutableList<PageItem>) {
+        val tree = runCatching { EqParser.parse(eq.script) }.getOrNull() ?: return
+        val box = EqLayout(measurer, eq.color).layout(tree, eq.fontSize.toFloat())
+        val k = if (eq.width > 0 && box.width > eq.width) eq.width / box.width else 1f
+        val baseline = top + eq.height * eq.baselinePercent / 100f
+        val dx = x + ((eq.width - box.width * k) / 2).coerceAtLeast(0f)
+        box.items.forEach { out += it.scaled(k, dx, baseline) }
+    }
+
+    private fun PageItem.scaled(k: Float, dx: Float, dy: Float): PageItem = when (this) {
+        is TextItem -> TextItem(text, FloatArray(xs.size) { xs[it] * k + dx }, baseline * k + dy, font.copy(size = font.size * k), color, scaleX)
+        is LineItem -> LineItem(x1 * k + dx, y1 * k + dy, x2 * k + dx, y2 * k + dy, width * k, color, style)
+        is PathItem -> PathItem(ops.map {
+            when (it) {
+                is PathOp.MoveTo -> PathOp.MoveTo(it.x * k + dx, it.y * k + dy)
+                is PathOp.LineTo -> PathOp.LineTo(it.x * k + dx, it.y * k + dy)
+                is PathOp.CubicTo -> PathOp.CubicTo(it.x1 * k + dx, it.y1 * k + dy, it.x2 * k + dx, it.y2 * k + dy, it.x * k + dx, it.y * k + dy)
+                PathOp.Close -> PathOp.Close
+            }
+        }, fill, stroke, strokeWidth * k, style)
+        else -> this
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -883,6 +916,7 @@ class PageLayouter(
         is TableObject -> placement
         is PictureObject -> placement
         is ShapeObject -> placement
+        is EquationObject -> placement
         else -> null
     }
 
@@ -890,6 +924,7 @@ class PageLayouter(
         is TableObject -> if (width > 0) width else TableGrid.of(this).width
         is PictureObject -> width
         is ShapeObject -> width
+        is EquationObject -> width
         else -> 0
     }
 
@@ -897,6 +932,7 @@ class PageLayouter(
         is TableObject -> if (height > 0) height else TableGrid.of(this).height
         is PictureObject -> height
         is ShapeObject -> height
+        is EquationObject -> height
         else -> 0
     }
 
