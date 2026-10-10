@@ -147,6 +147,34 @@ class PageLayouterTest {
         assertTrue(t.xs[2] - t.xs[1] > 0f, "space width must stay positive: ${t.xs.toList()}")
     }
 
+    private fun splitBox(): Paragraph {
+        val cellParas = listOf(
+            Paragraph(0, listOf(TextRun("first", 0, 0)), lineSegs = listOf(seg(0, 60000)), length = 6),
+            Paragraph(0, listOf(TextRun("second", 0, 0)), lineSegs = listOf(seg(0, 0), seg(0, 60000)), length = 7),
+        )
+        val cell = io.hwpbyhwp.core.model.TableCell(0, 0, 1, 1, 40000, 566, 0, 0, 0, 0, 0, io.hwpbyhwp.core.model.VertAlign.TOP, cellParas)
+        val table = io.hwpbyhwp.core.model.TableObject(1, 1, 40000, 566, 0, 0,
+            io.hwpbyhwp.core.model.ObjectPlacement.INLINE.copy(treatAsChar = false), listOf(cell))
+        return Paragraph(0, listOf(table), lineSegs = listOf(seg(0, 0)), length = 9)
+    }
+
+    @Test
+    fun textAfterPageSpanningBoxStartsNextPageWherePositionRestarts() {
+        // The box's continuation fills page 2; Hangul put the following paragraph at the top of page 3.
+        val after = Paragraph(0, listOf(TextRun("after", 0, 0)), lineSegs = listOf(seg(0, 0)), length = 6)
+        val pages = PageLayouter(doc(listOf(splitBox(), after)), mono).layout()
+        assertEquals(3, pages.size)
+        assertEquals(listOf("after"), pages[2].items.filterIsInstance<TextItem>().map { it.text })
+    }
+
+    @Test
+    fun textJustBelowPageSpanningBoxStaysOnItsPage() {
+        // A stored position a little above our measured box bottom is the text under the box, not a page break.
+        val after = Paragraph(0, listOf(TextRun("after", 0, 0)), lineSegs = listOf(seg(0, 55000)), length = 6)
+        val pages = PageLayouter(doc(listOf(splitBox(), after)), mono).layout()
+        assertEquals(2, pages.size)
+    }
+
     @Test
     fun cellTextContinuesOnNextPageWhereLinePositionsRestart() {
         // A one-cell box whose second paragraph Hangul placed on the next page (vertPos back to 0).

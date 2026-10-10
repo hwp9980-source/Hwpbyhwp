@@ -132,6 +132,10 @@ class PageLayouter(
         private var usedBottom = 0f
         private var pageHasLines = false
         private var lastVertPos: Int? = null
+        /** Counts page breaks, so a table can tell whether it ran onto later pages. */
+        private var pageSerial = 0
+        /** [lastVertPos] is the bottom of a table that ran on from earlier pages, measured by us, not stored. */
+        private var afterTableTail = false
         /** Running vertical position for paragraphs that carry no stored segments. */
         private var synthCursor = 0f
 
@@ -190,10 +194,12 @@ class PageLayouter(
 
         private fun newPage() {
             finishPage()
+            pageSerial++
             items = mutableListOf()
             usedBottom = 0f
             pageHasLines = false
             lastVertPos = null
+            afterTableTail = false
             columnIndex = 0
             hide = null
         }
@@ -328,7 +334,12 @@ class PageLayouter(
             segs.forEachIndexed { i, seg ->
                 // Hangul flags the first line of each page. Within a page, a stored vertical position that
                 // jumps back up means the text moved on to the next column (or, past the last one, a new page).
-                val jumpedBack = lastVertPos?.let { seg.vertPos < it - PAGE_TOLERANCE } == true
+                val jumpedBack = lastVertPos?.let {
+                    // Our height for a page-spanning table can exceed Hangul's, so after one only a
+                    // clear jump towards the top counts; a small one is the text right below the table.
+                    if (afterTableTail) seg.vertPos < it / 2 else seg.vertPos < it - PAGE_TOLERANCE
+                } == true
+                afterTableTail = false
                 if (pageHasLines && (seg.firstLineOfPage || jumpedBack)) {
                     flushBorder(isEnd = false)
                     if (seg.firstLineOfPage || columnIndex + 1 >= columns.size) newPage() else columnIndex++
@@ -419,23 +430,27 @@ class PageLayouter(
         /** Places a table, continuing its rows on following pages when it runs past the body bottom. */
         private fun placeTableOnPage(table: TableObject, x: Float, top: Float) {
             val grid = gridFor(table)
+            val startSerial = pageSerial
             val headerRows = if (table.repeatHeader) table.cells.filter { it.isHeader }.maxOfOrNull { it.row + it.rowSpan } ?: 0 else 0
             var rowStart = 0
             var y = top
             while (rowStart < grid.rowHeights.size) {
-                val available = bodyTop + bodyHeight - y
-                var rowEnd = rowStart
-                var height = 0f
-                while (rowEnd < grid.rowHeights.size && height + grid.rowHeights[rowEnd] <= available + PAGE_TOLERANCE) {
-                    height += grid.rowHeights[rowEnd]
-                    rowEnd++
-                }
-                if (rowEnd == rowStart && rowSplitsAcrossPages(table, rowStart)) {
-                    // Hangul broke this row's cells across pages; follow its line positions.
+                if (rowSplitsAcrossPages(table, rowStart)) {
+                    // Hangul broke this row's cells across pages; follow its line positions. Checked
+                    // before the height test: stored cell heights can be stale and look like they fit.
                     y = placeSplitRow(table, grid, rowStart, x, y, headerRows)
                     usedBottom = maxOf(usedBottom, y - bodyTop)
                     rowStart++
                     continue
+                }
+                val available = bodyTop + bodyHeight - y
+                var rowEnd = rowStart
+                var height = 0f
+                while (rowEnd < grid.rowHeights.size && !rowSplitsAcrossPages(table, rowEnd) &&
+                    height + grid.rowHeights[rowEnd] <= available + PAGE_TOLERANCE
+                ) {
+                    height += grid.rowHeights[rowEnd]
+                    rowEnd++
                 }
                 if (rowEnd == rowStart) {
                     if (y > bodyTop + PAGE_TOLERANCE) {
@@ -448,11 +463,19 @@ class PageLayouter(
                 }
                 drawTableRows(table, grid, rowStart until rowEnd, x, y, items)
                 usedBottom = maxOf(usedBottom, y + grid.rowY(rowEnd) - grid.rowY(rowStart) - bodyTop)
+                y += grid.rowY(rowEnd) - grid.rowY(rowStart)
                 rowStart = rowEnd
-                if (rowStart < grid.rowHeights.size) {
+                if (rowStart < grid.rowHeights.size && !rowSplitsAcrossPages(table, rowStart)) {
                     newPage()
                     y = bodyTop + repeatHeader(table, grid, headerRows, x, rowStart)
                 }
+            }
+            if (pageSerial != startSerial) {
+                // The table's tail occupies this page: following text positions count from below it, and
+                // a stored position jumping back up from there is the next page break.
+                pageHasLines = true
+                lastVertPos = (y - bodyTop).toInt()
+                afterTableTail = true
             }
         }
 
