@@ -16,6 +16,8 @@ import io.hwpbyhwp.core.model.PageSetup
 import io.hwpbyhwp.core.model.ParaShape
 import io.hwpbyhwp.core.model.Paragraph
 import io.hwpbyhwp.core.model.Section
+import io.hwpbyhwp.core.model.Tab
+import io.hwpbyhwp.core.model.TabType
 import io.hwpbyhwp.core.model.TextRun
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -116,5 +118,21 @@ class PageLayouterTest {
         assertEquals(bodyTop - 200, fill.top)
         assertEquals(bodyTop + 1000, fill.bottom)
         assertEquals(4, items.filterIsInstance<LineItem>().size)
+    }
+
+    @Test
+    fun rightTabPutsFollowingTextAtLineEndWithDotLeader() {
+        // "ab<TAB>12": the right tab pushes "12" to the end of the 10000-wide line.
+        val p = Paragraph(
+            0,
+            listOf(TextRun("ab", 0, 0), Tab(0, 2, width = 500, leader = BorderStyle.DOT, type = TabType.RIGHT), TextRun("12", 0, 10)),
+            lineSegs = listOf(seg(0, 0, width = 10000)), length = 13,
+        )
+        val items = PageLayouter(doc(listOf(p)), mono).layout().single().items
+        val number = items.filterIsInstance<TextItem>().first { it.text == "12" }
+        assertEquals(bodyLeft + 10000 - 1000, number.xs[0])
+        val leader = items.filterIsInstance<LineItem>().single()
+        assertEquals(BorderStyle.DOT, leader.style)
+        assertTrue(leader.x1 >= bodyLeft + 1000 && leader.x2 <= bodyLeft + 9000)
     }
 }

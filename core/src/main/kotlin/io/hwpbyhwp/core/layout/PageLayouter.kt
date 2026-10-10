@@ -34,6 +34,7 @@ import io.hwpbyhwp.core.model.RelTo
 import io.hwpbyhwp.core.model.Script
 import io.hwpbyhwp.core.model.Section
 import io.hwpbyhwp.core.model.Tab
+import io.hwpbyhwp.core.model.TabType
 import io.hwpbyhwp.core.model.TableCell
 import io.hwpbyhwp.core.model.TableObject
 import io.hwpbyhwp.core.model.TextRun
@@ -449,7 +450,10 @@ class PageLayouter(
         val obj: Inline? = null,
         val isTab: Boolean = false,
         val isBreak: Boolean = false,
+        val tab: Tab? = null,
     ) {
+        /** Fill drawn across a tab, decided when the tab is laid out. */
+        var leader: BorderStyle = BorderStyle.NONE
         val isSpace get() = obj == null && !isTab && (char == ' ' || char == '\u00A0' || char == '\u3000')
     }
 
@@ -467,7 +471,7 @@ class PageLayouter(
                     text.forEachIndexed { i, c -> atoms += Atom(inline.start + startIdx + i, c, shape, scriptOf(c), widths[i]) }
                 }
                 is Tab -> if (inline.start in from until to) {
-                    atoms += Atom(inline.start, '\t', document.charShape(inline.charShapeId), Script.LATIN, 0f, isTab = true)
+                    atoms += Atom(inline.start, '\t', document.charShape(inline.charShapeId), Script.LATIN, 0f, isTab = true, tab = inline)
                 }
                 is LineBreak -> if (inline.start in from until to) {
                     atoms += Atom(inline.start, '\n', document.charShape(inline.charShapeId), Script.LATIN, 0f, isBreak = true)
@@ -567,12 +571,7 @@ class PageLayouter(
         val x0 = left + seg.horzPos + indent + headWidth
         val available = seg.width - indent - headWidth
 
-        // Tabs advance to the next default tab stop measured from the segment start.
-        var x = 0f
-        for (a in atoms) {
-            if (a.isTab) a.width = (((x / DEFAULT_TAB).toInt() + 1) * DEFAULT_TAB - x).coerceAtLeast(1f)
-            x += a.width
-        }
+        layoutTabs(atoms, document.tabDef(shape.tabDefId), available, x0 - (left + shape.marginLeft.coerceAtLeast(0)))
 
         var visible = atoms.size
         while (visible > 0 && (atoms[visible - 1].isSpace || atoms[visible - 1].isBreak)) visible--
@@ -588,7 +587,7 @@ class PageLayouter(
             HAlign.LEFT -> Unit
             HAlign.RIGHT -> offset = slack
             HAlign.CENTER -> offset = slack / 2
-            HAlign.JUSTIFY -> if (!isLast && !endsWithBreak && spaces > 0) perSpace = slack / spaces
+            HAlign.JUSTIFY -> if (!isLast && !endsWithBreak && spaces > 0 && atoms.none { it.isTab }) perSpace = slack / spaces
             HAlign.DISTRIBUTE -> if (visible > 1) perChar = slack / (visible - 1)
             HAlign.DISTRIBUTE_SPACE -> if (spaces > 0) perSpace = slack / spaces
         }
@@ -615,6 +614,11 @@ class PageLayouter(
                 i++
                 continue
             }
+            if (a.isTab && a.leader != BorderStyle.NONE && a.width > 0f) {
+                val size = a.shape.baseSize.toFloat()
+                val y = baseline - size * 0.1f
+                out += LineItem(cx + size * 0.15f, y, cx + a.width - size * 0.15f, y, size * 0.08f, a.shape.textColor, a.leader)
+            }
             if (a.isTab || a.isBreak) {
                 cx += a.width + perChar
                 i++
@@ -634,6 +638,50 @@ class PageLayouter(
             }
             emitText(sb.toString(), xs.toFloatArray(), cx, baseline, a.shape, a.script, out)
             i = j
+        }
+    }
+
+    /**
+     * Sizes the tabs of one line. A right/center/decimal tab pushes the text up to the next tab (or
+     * the line end) so that it ends at, or centers on, its stop; with no stop inside the line that is
+     * the line end, which is how tables of contents put page numbers at the right margin. A left
+     * tab advances to the next stop, else by the width Hangul stored, else to the default grid.
+     * [lineOffset] is where the line starts relative to the paragraph's left margin, the origin of
+     * tab stop positions.
+     */
+    private fun layoutTabs(atoms: List<Atom>, def: io.hwpbyhwp.core.model.TabDef?, available: Float, lineOffset: Float) {
+        var x = 0f
+        atoms.forEachIndexed { i, a ->
+            if (!a.isTab) { x += a.width; return@forEachIndexed }
+            val tab = a.tab
+            val stop = def?.stops?.firstOrNull { it.position - lineOffset > x + 1f && it.position - lineOffset <= available + 1f }
+            val type = stop?.type ?: tab?.type ?: TabType.LEFT
+            a.leader = stop?.leader?.takeIf { it != BorderStyle.NONE } ?: tab?.leader ?: BorderStyle.NONE
+            a.width = when (type) {
+                TabType.LEFT -> when {
+                    stop != null -> stop.position - lineOffset - x
+                    tab?.width != null -> tab.width.toFloat()
+                    else -> ((x / DEFAULT_TAB).toInt() + 1) * DEFAULT_TAB - x
+                }
+                else -> {
+                    val target = stop?.let { it.position - lineOffset } ?: available
+                    var following = 0f
+                    for (k in i + 1 until atoms.size) {
+                        if (atoms[k].isTab || atoms[k].isBreak) break
+                        following += atoms[k].width
+                    }
+                    // Trailing spaces do not count toward the aligned text.
+                    var trailing = 0f
+                    var last = atoms.size - 1
+                    while (last > i && (atoms[last].isSpace || atoms[last].isBreak)) { trailing += atoms[last].width; last-- }
+                    if (atoms.subList(i + 1, atoms.size).none { it.isTab }) following -= trailing
+                    when (type) {
+                        TabType.CENTER -> target - x - following / 2
+                        else -> target - x - following
+                    }
+                }
+            }.coerceAtLeast(0f)
+            x += a.width
         }
     }
 

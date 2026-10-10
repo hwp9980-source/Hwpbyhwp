@@ -42,6 +42,9 @@ import io.hwpbyhwp.core.model.RelTo
 import io.hwpbyhwp.core.model.Script
 import io.hwpbyhwp.core.model.Section
 import io.hwpbyhwp.core.model.Tab
+import io.hwpbyhwp.core.model.TabDef
+import io.hwpbyhwp.core.model.TabStop
+import io.hwpbyhwp.core.model.TabType
 import io.hwpbyhwp.core.model.TableCell
 import io.hwpbyhwp.core.model.TableObject
 import io.hwpbyhwp.core.model.TextRun
@@ -60,6 +63,9 @@ import kr.dogfoot.hwpxlib.`object`.content.header_xml.enumtype.UnderlineType
 import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.BorderFill as XBorderFill
 import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.CharPr
 import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.ParaPr
+import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.TabPr
+import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.tabpr.TabItem
+import kr.dogfoot.hwpxlib.`object`.content.header_xml.enumtype.TabItemType
 import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.borderfill.Border as XBorder
 import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.charpr.ValuesByLanguage
 import kr.dogfoot.hwpxlib.`object`.content.header_xml.references.Fontface
@@ -139,6 +145,7 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             paraShapes = refList?.paraProperties().byId { it.id() }.mapValues { (_, v) -> v.toModel() },
             borderFills = refList?.borderFills().byId { it.id() }.mapValues { (_, v) -> v.toModel() },
             binaries = loadBinaries(),
+            tabDefs = refList?.tabProperties().byId { it.id() }.mapValues { (_, t) -> t.toModel() },
             numberings = refList?.numberings().byId { it.id() }.mapValues { (_, n) ->
                 NumberingDef(
                     levels = n.paraHeads().sortedBy { it.level() ?: 0 }.map { h ->
@@ -341,6 +348,34 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
         }
     }
 
+    private fun LineType2?.toBorderStyleOrNone(): BorderStyle =
+        if (this == null || this == LineType2.NONE) BorderStyle.NONE else toBorderStyle()
+
+    private fun TabItemType?.toTabType(): TabType? = when (this) {
+        TabItemType.LEFT -> TabType.LEFT
+        TabItemType.RIGHT -> TabType.RIGHT
+        TabItemType.CENTER -> TabType.CENTER
+        TabItemType.DECIMAL -> TabType.DECIMAL
+        null -> null
+    }
+
+    /** Tab stops sit inside <hp:switch> like margins: the HwpUnitChar case is exact, the rest doubled. */
+    private fun TabPr.toModel(): TabDef {
+        val exact = switchList().orEmpty().flatMap { sw ->
+            sw.caseObjects()?.filter { it.requiredNamespace()?.endsWith(HWP_UNIT_CHAR) == true }
+                ?.flatMap { c -> c.children()?.filterIsInstance<TabItem>().orEmpty() }.orEmpty()
+        }
+        val items = exact.map { it to 1 }.ifEmpty {
+            (tabItems()?.toList().orEmpty() + switchList().orEmpty().flatMap { sw ->
+                sw.defaultObject()?.children()?.filterIsInstance<TabItem>().orEmpty()
+            }).map { it to 2 }
+        }
+        return TabDef(
+            stops = items.map { (t, k) -> TabStop((t.pos() ?: 0) / k, t.type().toTabType() ?: TabType.LEFT, t.leader().toBorderStyleOrNone()) },
+            autoRightEnd = autoTabRight() == true,
+        )
+    }
+
     private fun LineType2?.toBorderStyle(): BorderStyle = when (this) {
         LineType2.DOT -> BorderStyle.DOT
         LineType2.DASH -> BorderStyle.DASH
@@ -379,7 +414,11 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
         for (item in t.items() ?: return position) {
             when (item) {
                 is NormalText -> append(item.text().orEmpty())
-                is XTab -> { flush(); out += Tab(shape, position); position += CONTROL_SIZE }
+                is XTab -> {
+                    flush()
+                    out += Tab(shape, position, item.width()?.takeIf { it > 0 }, item.leader().toBorderStyleOrNone(), item.type().toTabType())
+                    position += CONTROL_SIZE
+                }
                 is XLineBreak -> { flush(); out += LineBreak(shape, position); position += 1 }
                 is NBSpace -> append("\u00A0")
                 is FWSpace -> append(" ")
@@ -564,6 +603,7 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
                 else -> HeadType.NONE
             },
             headId = heading()?.idRef().toIntId(),
+            tabDefId = tabPrIDRef().toIntId(),
             level = heading()?.level()?.toInt() ?: 0,
         )
     }

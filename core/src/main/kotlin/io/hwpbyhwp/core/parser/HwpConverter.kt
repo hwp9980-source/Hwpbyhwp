@@ -42,6 +42,9 @@ import io.hwpbyhwp.core.model.RelTo
 import io.hwpbyhwp.core.model.Script
 import io.hwpbyhwp.core.model.Section
 import io.hwpbyhwp.core.model.Tab
+import io.hwpbyhwp.core.model.TabDef
+import io.hwpbyhwp.core.model.TabStop
+import io.hwpbyhwp.core.model.TabType
 import io.hwpbyhwp.core.model.TableCell
 import io.hwpbyhwp.core.model.TableObject
 import io.hwpbyhwp.core.model.TextRun
@@ -86,7 +89,9 @@ import kr.dogfoot.hwplib.`object`.bodytext.control.gso.textbox.TextVerticalAlign
 import kr.dogfoot.hwplib.`object`.bodytext.control.sectiondefine.PageDef
 import kr.dogfoot.hwplib.`object`.bodytext.control.sectiondefine.PaperDirection
 import kr.dogfoot.hwplib.`object`.bodytext.paragraph.Paragraph as HwpParagraph
+import kr.dogfoot.hwplib.`object`.bodytext.paragraph.text.HWPCharControlInline
 import kr.dogfoot.hwplib.`object`.bodytext.paragraph.text.HWPCharNormal
+import kr.dogfoot.hwplib.`object`.docinfo.tabdef.TabSort
 import kr.dogfoot.hwplib.`object`.bodytext.paragraph.text.HWPCharType
 import kr.dogfoot.hwplib.`object`.docinfo.FaceName
 import kr.dogfoot.hwplib.`object`.docinfo.borderfill.BorderThickness
@@ -139,6 +144,24 @@ internal class HwpConverter(private val hwp: HWPFile) {
             // Border/fill ids are 1-based in HWP.
             borderFills = docInfo.borderFillList.withIndex().associate { (i, bf) -> i + 1 to bf.toModel() },
             binaries = binaries,
+            // Tab positions are stored doubled, like paragraph margins.
+            tabDefs = docInfo.tabDefList.withIndex().associate { (i, t) ->
+                i to TabDef(
+                    stops = t.tabInfoList.map { ti ->
+                        TabStop(
+                            (ti.position / 2).toInt(),
+                            when (ti.tabSort) {
+                                TabSort.Right -> TabType.RIGHT
+                                TabSort.Center -> TabType.CENTER
+                                TabSort.DecimalPoint -> TabType.DECIMAL
+                                else -> TabType.LEFT
+                            },
+                            toModelStyle(ti.fillSort),
+                        )
+                    },
+                    autoRightEnd = t.property.isAutoTabAtParagraphRightEnd,
+                )
+            },
             numberings = docInfo.numberingList.withIndex().associate { (i, n) ->
                 i + 1 to NumberingDef(
                     levels = n.levelNumberingList.map { lv ->
@@ -227,7 +250,10 @@ internal class HwpConverter(private val hwp: HWPFile) {
                     31 -> appendText(" ")
                     else -> Unit // 13 = paragraph end
                 }
-                HWPCharType.ControlInline -> if (ch.code == 9) { flushText(); inlines += Tab(currentShape, position) }
+                HWPCharType.ControlInline -> if (ch.code == 9) {
+                    flushText()
+                    inlines += tabOf((ch as HWPCharControlInline).addition, currentShape, position)
+                }
                 HWPCharType.ControlExtend -> {
                     // Extended control characters map one-to-one, in order, onto the paragraph's control list.
                     val control = controls.getOrNull(controlIndex++)
@@ -255,6 +281,25 @@ internal class HwpConverter(private val hwp: HWPFile) {
             },
             length = position,
         )
+    }
+
+    /**
+     * A tab's inline data holds the width Hangul laid it out with (int32 LE), then the fill line
+     * type and the tab kind (1-based: left, right, center, decimal).
+     */
+    private fun tabOf(addition: ByteArray?, shape: Int, position: Int): Tab {
+        if (addition == null || addition.size < 6) return Tab(shape, position)
+        val width = (addition[0].toInt() and 0xFF) or ((addition[1].toInt() and 0xFF) shl 8) or
+            ((addition[2].toInt() and 0xFF) shl 16) or ((addition[3].toInt() and 0xFF) shl 24)
+        val leader = BorderType.entries.getOrNull(addition[4].toInt() and 0xFF)?.let { toModelStyle(it) } ?: BorderStyle.NONE
+        val type = when (addition[5].toInt() and 0xFF) {
+            2 -> TabType.RIGHT
+            3 -> TabType.CENTER
+            4 -> TabType.DECIMAL
+            1 -> TabType.LEFT
+            else -> null
+        }
+        return Tab(shape, position, width.takeIf { it in 1..1_000_000 }, leader, type)
     }
 
     private fun convertControl(control: Control?, position: Int, charShape: Int): Inline? = when {
@@ -562,6 +607,7 @@ internal class HwpConverter(private val hwp: HWPFile) {
                 else -> HeadType.NONE
             },
             headId = paraHeadId,
+            tabDefId = tabDefId,
             level = prop.paraLevel.toInt(),
             pageBreakBefore = prop.isSplitPageBeforePara,
         )
@@ -581,6 +627,19 @@ internal class HwpConverter(private val hwp: HWPFile) {
         fillColor = fillInfo?.takeIf { it.type?.hasPatternFill() == true }
             ?.patternFill?.backColor?.toArgbOrNull(),
     )
+
+    private fun toModelStyle(type: BorderType?): BorderStyle = when (type) {
+        BorderType.None, null -> BorderStyle.NONE
+        BorderType.Solid -> BorderStyle.SOLID
+        BorderType.Dash -> BorderStyle.DASH
+        BorderType.Dot -> BorderStyle.DOT
+        BorderType.DashDot -> BorderStyle.DASH_DOT
+        BorderType.DashDotDot -> BorderStyle.DASH_DOT_DOT
+        BorderType.LongDash -> BorderStyle.LONG_DASH
+        BorderType.CircleDot -> BorderStyle.CIRCLE
+        BorderType.Double -> BorderStyle.DOUBLE
+        else -> BorderStyle.SOLID
+    }
 
     private fun EachBorder.toModel(): Border = Border(
         style = when (type) {

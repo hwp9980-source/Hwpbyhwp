@@ -15,11 +15,13 @@ data class Document(
     /** Embedded binary data (mostly images), keyed by [Picture.binId]. */
     val binaries: Map<String, ByteArray>,
     val numberings: Map<Int, NumberingDef> = emptyMap(),
+    val tabDefs: Map<Int, TabDef> = emptyMap(),
     val bullets: Map<Int, BulletDef> = emptyMap(),
 ) {
     fun charShape(id: Int): CharShape = charShapes[id] ?: CharShape.DEFAULT
     fun paraShape(id: Int): ParaShape = paraShapes[id] ?: ParaShape.DEFAULT
     fun borderFill(id: Int): BorderFill? = borderFills[id]
+    fun tabDef(id: Int): TabDef? = tabDefs[id]
 
     /** Plain text of the whole document, one line per paragraph. Tables are flattened cell by cell. */
     fun plainText(): String = buildString {
@@ -143,7 +145,22 @@ sealed interface Inline {
 }
 
 data class TextRun(val text: String, val charShapeId: Int, override val start: Int = 0) : Inline
-data class Tab(val charShapeId: Int, override val start: Int = 0) : Inline
+data class Tab(
+    val charShapeId: Int,
+    override val start: Int = 0,
+    /** Width Hangul computed for this tab when it saved the file, if stored. */
+    val width: Int? = null,
+    /** Fill drawn across the tab (채울 모양), e.g. dots in a table of contents. */
+    val leader: BorderStyle = BorderStyle.NONE,
+    val type: TabType? = null,
+) : Inline
+
+enum class TabType { LEFT, RIGHT, CENTER, DECIMAL }
+
+data class TabStop(val position: Int, val type: TabType, val leader: BorderStyle)
+
+/** 탭 정의: explicit stops plus Hangul's automatic tab at the paragraph's right end. */
+data class TabDef(val stops: List<TabStop>, val autoRightEnd: Boolean = false)
 data class LineBreak(val charShapeId: Int, override val start: Int = 0) : Inline
 
 /** Starts a multi-column zone (단 정의). Applies from the paragraph that holds it onward. */
@@ -409,6 +426,7 @@ data class ParaShape(
     val borderIgnoreMargin: Boolean = false,
     val keepWithNext: Boolean = false,
     val pageBreakBefore: Boolean = false,
+    val tabDefId: Int = 0,
     /** Paragraph head (문단 머리): outline number, numbering or bullet. */
     val headType: HeadType = HeadType.NONE,
     /** Numbering or bullet id for [HeadType.NUMBER] / [HeadType.BULLET]. */
