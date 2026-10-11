@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -32,7 +33,7 @@ import io.hwpbyhwp.core.layout.Page
 @Composable
 fun PageView(pages: List<Page>, binaries: Map<String, ByteArray>, modifier: Modifier = Modifier) {
     val painter = remember(binaries) { PagePainter(binaries) }
-    var zoom by remember { mutableFloatStateOf(1f) }
+    var zoom by rememberSaveable { mutableFloatStateOf(1f) }
     BoxWithConstraints(
         modifier
             .background(Color(0xFFDADADA))
