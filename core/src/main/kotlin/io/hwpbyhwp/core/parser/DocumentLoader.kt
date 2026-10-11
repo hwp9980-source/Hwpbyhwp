@@ -1,5 +1,6 @@
 package io.hwpbyhwp.core.parser
 
+import io.hwpbyhwp.core.layout.Wmf
 import io.hwpbyhwp.core.model.Document
 import kr.dogfoot.hwplib.reader.HWPReader
 import kr.dogfoot.hwpxlib.reader.HWPXReader
@@ -38,7 +39,7 @@ object DocumentLoader {
             when (format) {
                 DocumentFormat.HWP -> HwpConverter(HWPReader.fromFile(file)).convert()
                 DocumentFormat.HWPX -> HwpxConverter(HWPXReader.fromFile(file)).convert()
-            }
+            }.withMetafileBitmaps()
         } catch (e: UnsupportedDocumentException) {
             throw e
         } catch (e: Exception) {
@@ -63,4 +64,12 @@ object DocumentLoader {
     private val OLE_SIGNATURE = byteArrayOf(
         0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte(),
     )
+
+    /** Bitmaps inside WMF pictures become binaries of their own, so renderers can decode them. */
+    private fun Document.withMetafileBitmaps(): Document {
+        val extra = binaries.filter { Wmf.isWmf(it.value) }.flatMap { (id, data) ->
+            Wmf.embeddedBitmaps(data).mapIndexed { i, bmp -> Wmf.bitmapKey(id, i) to bmp }
+        }
+        return if (extra.isEmpty()) this else copy(binaries = binaries + extra)
+    }
 }

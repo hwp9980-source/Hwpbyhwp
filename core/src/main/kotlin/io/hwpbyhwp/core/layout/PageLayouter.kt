@@ -460,7 +460,7 @@ class PageLayouter(
         private fun placeInlineObjectOnPage(obj: Inline, x: Float, top: Float) {
             when (obj) {
                 is TableObject -> placeTableOnPage(obj, x, top)
-                is PictureObject -> items += ImageItem(obj.binId, x, top, obj.width.toFloat(), obj.height.toFloat())
+                is PictureObject -> drawPicture(obj.binId, x, top, obj.width.toFloat(), obj.height.toFloat(), items)
                 is ShapeObject -> drawShape(obj, x, top, items)
                 is EquationObject -> drawEquation(obj, x, top, items)
                 else -> Unit
@@ -488,7 +488,7 @@ class PageLayouter(
             }
             when (obj) {
                 is TableObject -> placeTableOnPage(obj, x, y)
-                is PictureObject -> items += ImageItem(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat())
+                is PictureObject -> drawPicture(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat(), items)
                 is ShapeObject -> drawShape(obj, x, y, items)
                 is EquationObject -> drawEquation(obj, x, y, items)
                 else -> Unit
@@ -1265,11 +1265,19 @@ class PageLayouter(
                 val grid = gridFor(obj)
                 drawTableRows(obj, grid, 0 until grid.rowHeights.size, x, y, out)
             }
-            is PictureObject -> out += ImageItem(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat())
+            is PictureObject -> drawPicture(obj.binId, x, y, obj.width.toFloat(), obj.height.toFloat(), out)
             is ShapeObject -> drawShape(obj, x, y, out)
             is EquationObject -> drawEquation(obj, x, y, out)
             else -> Unit
         }
+    }
+
+    /** A picture: decodable images are drawn by the renderer, metafiles are replayed here. */
+    private fun drawPicture(binId: String, x: Float, y: Float, w: Float, h: Float, out: MutableList<PageItem>) {
+        val data = document.binaries[binId]
+        val metafile = if (Wmf.isWmf(data)) Wmf.render(data!!, binId, x, y, w, h, measurer) else null
+        if (metafile != null) out += ClipItem(x, y, x + w, y + h, metafile)
+        else out += ImageItem(binId, x, y, w, h)
     }
 
     /**
@@ -1319,7 +1327,7 @@ class PageLayouter(
             ShapeKind.CONTAINER -> s.children.forEach { drawShapeWith(it, m * it.transform, out) }
             ShapeKind.PICTURE -> {
                 val b = transformedBox(s, m)
-                s.binId?.let { out += ImageItem(it, b.left.toFloat(), b.top.toFloat(), b.width.toFloat(), b.height.toFloat()) }
+                s.binId?.let { drawPicture(it, b.left.toFloat(), b.top.toFloat(), b.width.toFloat(), b.height.toFloat(), out) }
             }
             else -> {
                 ShapePaths.outline(s, m)?.let { ops ->
