@@ -89,15 +89,6 @@
 - `HWP_SAMPLES=<폴더> ./gradlew :core:test`: 폴더 안 모든 문서를 읽습니다. 저장된 줄 배치로 여백 단위 변환을, hwplib 출력으로 문단 번호를 교차 검증합니다.
 - `HWP_PREVIEW_OUT=<폴더>`를 함께 주면 쪽을 PNG로 그립니다. `HWP_PREVIEW_FILTER`는 파일명 필터, `HWP_PREVIEW_PAGES=5-20`은 쪽 범위, `HWP_PREVIEW_DPI`는 해상도입니다.
 
-### 빌드와 릴리스
-
-- CI(GitHub Actions)는 `core` 테스트를 돌린 뒤 디버그 APK를 아티팩트로 올립니다.
-- 디버그 APK의 앱 ID는 `io.hwpbyhwp.viewer.debug`입니다. 저장소의 공개 키(`app/debug.keystore`)로 서명되어, 릴리스판과 별도 앱으로 설치됩니다.
-- 릴리스는 두 가지로 만들 수 있습니다.
-  - Actions → CI → Run workflow에 버전(예: `v0.1.1`)을 넣습니다.
-  - `v`로 시작하는 태그를 push합니다.
-- 릴리스 APK는 저장소에 없는 비공개 키로 서명합니다. 저장소 Secrets에 `RELEASE_KEYSTORE_BASE64`(키스토어의 base64)와 `RELEASE_KEYSTORE_PASSWORD`가 있어야 합니다(키 별칭 `hwpbyhwp`).
-
 ## 라이선스
 
 [Apache License 2.0](LICENSE)
