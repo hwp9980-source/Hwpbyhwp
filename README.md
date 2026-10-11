@@ -53,6 +53,8 @@
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
+또는 Actions 탭의 CI 워크플로에서 Run workflow를 눌러 버전(`v0.1.0`)을 넣으면 같은 일을 한다.
+
 ## 라이선스
 
 [Apache License 2.0](LICENSE).
