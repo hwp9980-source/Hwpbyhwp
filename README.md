@@ -1,63 +1,106 @@
 # hwpbyhwp
 
-안드로이드용 HWP/HWPX 문서 뷰어.
+안드로이드 휴대폰·태블릿에서 한글(아래아한글) 문서 **HWP·HWPX 파일을 보는 앱**입니다.
+
+메신저나 메일로 받은 공문·안내문·보고서를 한컴오피스 없이 열어 볼 수 있습니다.
+문서를 **보기만** 하는 앱이며, 고치거나 새로 만들 수는 없습니다.
+
+- 무료·오픈소스(Apache 2.0)이고 광고가 없습니다.
+- **인터넷 권한이 없는 앱**입니다. 연 문서는 휴대폰 밖으로 전송되지 않습니다.
+- 한컴과 관계없는 개인 프로젝트입니다.
 
 ## 설치
 
-[Releases](../../releases)에서 최신 `hwpbyhwp-*.apk`를 받아 설치한다(알 수 없는 출처 앱 설치 허용 필요).
-릴리스 APK는 저장소에 없는 비공개 키로 서명된다. CI 아티팩트의 디버그 APK는 공개 디버그 키로 서명되며 앱 ID가 달라(`io.hwpbyhwp.viewer.debug`) 별도 앱으로 설치된다.
+1. [Releases](../../releases/latest)에서 최신 `hwpbyhwp-버전.apk`를 받습니다.
+2. 받은 파일을 눌러 설치합니다. 처음이면 "출처를 알 수 없는 앱 설치 허용"을 켜야 합니다.
 
-## 구조
+- 안드로이드 8.0 이상에서 동작합니다.
+- 새 버전은 같은 방법으로 받아 설치하면 업데이트됩니다.
+- v0.1.0 이전 시험판(Actions에서 받은 디버그판)이 깔려 있으면 서명이 달라 업데이트가 안 됩니다. 한 번 지우고 설치하세요.
+
+## 사용법
+
+- **파일 열기**: 앱에서 「열기」를 누르고 문서를 고릅니다. 여러 개를 한꺼번에 고를 수 있습니다.
+- **다른 앱에서 열기**: 파일 관리자·카카오톡·메일 등에서 HWP 파일을 누르거나 「공유」를 누르고 이 앱을 고릅니다.
+- **여러 문서**: 문서마다 탭이 생깁니다. 탭을 눌러 오가고, ✕로 닫습니다. 탭마다 보던 위치와 확대 배율이 유지됩니다.
+- **확대**: 두 손가락으로 벌리면 최대 4배까지 커지고, 확대한 상태에서는 좌우로도 움직입니다.
+- **읽기 모드**: 쪽 구분 없이 글을 화면 폭에 맞춰 이어 보여 줍니다. 작은 화면에서 긴 글을 읽을 때 편합니다. 「쪽 보기」를 누르면 원래 모양으로 돌아옵니다.
+
+## 볼 수 있는 것
+
+한글이 저장해 둔 줄·쪽 나눔 정보를 그대로 따라 그리므로, 쪽 구성은 한글에서 본 것과 대체로 같습니다.
+
+- 글자: 글꼴 크기·굵게·기울임·밑줄·취소선·색, 장평·자간, 위첨자·아래첨자
+- 문단: 정렬, 들여쓰기·여백, 줄 간격, 탭(점선 채움 포함), 문단 테두리·배경
+- 번호: 개요 번호, 문단 번호, 글머리표
+- 표: 셀 합치기, 테두리·배경색, 여러 쪽에 걸친 표(제목 행 반복 포함), 표 안의 표
+- 그림(PNG·JPG·GIF·BMP), 글상자, 선·사각형·타원·호·다각형·곡선 같은 그리기 개체
+- 쪽 구성: 다단, 머리말·꼬리말, 쪽 번호, 새 번호로 시작·감추기, 각주·미주, 가로 방향 쪽
+- 수식(분수, 근호, 첨자, 합·적분 기호, 행렬 등)
+
+## 아직 안 되는 것
+
+다음은 **보이지 않거나 다르게 보입니다.**
+
+- **WMF·EMF·TIFF 그림**은 회색 빈 상자로 나옵니다. 한글 문서의 일부 그림이 이 형식입니다.
+- **차트, OLE 개체**(엑셀 표 붙여넣기 등), 양식 개체(입력란·체크박스 등)는 표시되지 않습니다.
+- 그림 회전, 그라데이션·그림 채우기는 적용되지 않습니다. 곡선은 꺾은선에 가깝게 그려집니다.
+- **암호가 걸린 문서**는 열 수 없습니다.
+- 변경 추적(고친 흔적) 표시는 나오지 않습니다.
+- **글자 찾기, 글자 복사, 인쇄, PDF로 저장**은 아직 없습니다.
+
+## 원본과 다르게 보일 수 있는 점
+
+- **글꼴**: 한컴 글꼴(함초롬바탕·돋움, 휴먼명조 등)은 라이선스상 넣을 수 없습니다. 그래서 Noto Sans KR(고딕 계열)과 Noto Serif KR(명조 계열)로 바꿔 보여 줍니다.
+- 글자 폭이 원래 글꼴과 달라, 빽빽한 줄은 글자 간격을 약간 좁혀 한 줄에 맞춥니다.
+- 줄과 쪽이 나뉘는 위치는 한글이 저장한 정보를 따르므로 대부분 같습니다. 다만 표가 쪽을 넘어가는 부분이나 떠 있는 개체 근처에서는 위치가 조금 다르거나 겹칠 수 있습니다.
+- 한컴 뷰어와 나란히 놓고 비교하는 검증은 아직 충분하지 않습니다.
+
+## 문제 신고
+
+잘못 보이는 문서가 있으면 [Issues](../../issues)에 알려 주세요.
+
+- 어느 쪽이 어떻게 다른지 스크린숏을 붙여 주면 가장 좋습니다.
+- **문서 파일을 올릴 때는 개인정보가 없는지 꼭 확인하세요.** 이슈는 누구나 볼 수 있습니다.
+
+---
+
+## 개발자용
+
+### 구조
 
 | 모듈 | 내용 | 빌드 |
 |---|---|---|
-| `core` | 문서 모델, HWP/HWPX 변환기, 레이아웃 계산 (순수 Kotlin/JVM) | 아무 JVM에서 `./gradlew :core:test` |
-| `app` | Android 앱 (Jetpack Compose) | Android SDK 필요: `./gradlew -PwithApp :app:assembleDebug` |
+| `core` | 문서 모델, HWP/HWPX 변환, 쪽 배치 계산, 수식 조판 (순수 Kotlin/JVM) | 아무 JVM에서 `./gradlew :core:test` |
+| `app` | 안드로이드 앱 (Jetpack Compose) | Android SDK 필요: `./gradlew -PwithApp :app:assembleDebug` |
 
-- 파싱: [hwplib](https://github.com/neolord0/hwplib)(HWP 5.x), [hwpxlib](https://github.com/neolord0/hwpxlib)(HWPX). 둘 다 Apache-2.0.
-- 두 형식을 `core/model/Document.kt`의 공통 모델로 변환한 뒤 렌더링한다. 길이 단위는 HWPUNIT(1/7200 inch).
-- `app` 모듈은 `-PwithApp`을 줄 때만 포함된다. Android SDK 없이도 core를 빌드·테스트할 수 있게 하기 위함.
-- CI(GitHub Actions)는 core 테스트 후 디버그 APK를 빌드해 아티팩트로 올린다.
-- 디버그 APK는 저장소의 고정 키(`app/debug.keystore`, 비밀 아님)로 서명하고 버전 코드는 CI 실행 번호를 쓴다. 그래서 새 빌드를 기존 설치 위에 업데이트로 설치할 수 있다.
+- 파일 해석은 [hwplib](https://github.com/neolord0/hwplib)(HWP 5.x)과 [hwpxlib](https://github.com/neolord0/hwpxlib)(HWPX)로 합니다.
+- 두 형식 모두 `core/model/Document.kt`의 공통 모델로 바꾼 뒤 그립니다. 길이 단위는 HWPUNIT(1/7200 inch)입니다.
+- 쪽 배치는 한글이 문단마다 저장한 줄 배치(LineSeg)를 따릅니다. 줄 배치가 없는 문단만 직접 줄을 나눕니다.
+- `app` 모듈은 `-PwithApp`을 줄 때만 포함됩니다. Android SDK 없이도 `core`를 빌드·테스트하기 위해서입니다.
 
-## 단위 메모
+### 단위 메모
 
-- HWP 바이너리의 문단 여백·들여쓰기·문단 간격은 실제 값의 2배로 저장된다. 변환기에서 2로 나눈다.
-- HWPX는 같은 값을 `<hp:switch>` 안에 두 벌 저장한다. `HwpUnitChar` case는 실제 HWPUNIT, default는 HWP처럼 2배 값이다.
+- HWP 바이너리의 문단 여백·들여쓰기·문단 간격과 탭 위치는 실제 값의 2배로 저장됩니다.
+- HWPX는 같은 값을 `<hp:switch>` 안에 두 벌 둡니다. `HwpUnitChar` case가 실제 값이고, default는 2배 값입니다.
 
-## 로드맵
+### 테스트 도구
 
-1. [x] 프로젝트 구조, 파일 열기(SAF·외부 앱 공유), 파서 연결, CI
-2. [x] 공통 문서 모델 (문단·글자 모양·문단 모양·표·그림·테두리/배경)
-3. [x] 페이지 레이아웃 엔진: 한글이 저장한 줄 배치(LineSeg)를 따라 줄·쪽 나눔 재현, 없으면 직접 계산. 표 쪽 넘김·제목 행 반복, 그림, 떠 있는 개체
-4. [x] 페이지 렌더러 (Canvas, 두 손가락 확대/축소). 읽기 모드 전환 가능. 여러 문서를 탭으로 열기(여러 개 선택·여러 파일 공유 수신)
-5. [x] 나머지 요소
-   - [x] 다단, 머리말/꼬리말, 쪽 번호
-   - [x] 그리기 개체(선·사각형·타원·호·다각형·곡선·묶음·글상자), 문단 테두리/배경
-   - [x] 개요 번호·문단 번호·글머리표, 각주/미주
-   - [x] 수식: 한글 수식 스크립트를 직접 파싱·조판 (분수, 근호, 첨자, 큰 연산자, 괄호 늘이기, 행렬/cases/pile, 악센트, 기호)
-   - [x] 글꼴: Noto Sans/Serif KR 번들(SIL OFL 1.1). 문서 글꼴 이름으로 고딕/명조/고정폭 계열을 골라 대체
-6. [ ] 실제 문서 샘플로 한컴 뷰어와 비교 검증
+- `HWP_SAMPLES=<폴더> ./gradlew :core:test`: 폴더 안 모든 문서를 읽습니다. 저장된 줄 배치로 여백 단위 변환을, hwplib 출력으로 문단 번호를 교차 검증합니다.
+- `HWP_PREVIEW_OUT=<폴더>`를 함께 주면 쪽을 PNG로 그립니다. `HWP_PREVIEW_FILTER`는 파일명 필터, `HWP_PREVIEW_PAGES=5-20`은 쪽 범위, `HWP_PREVIEW_DPI`는 해상도입니다.
 
-## 개발용 테스트 도구
+### 빌드와 릴리스
 
-- `HWP_SAMPLES=<폴더> ./gradlew :core:test`: 폴더 안의 모든 문서를 읽고, 저장된 줄 배치로 여백 단위 변환을 교차 검증한다.
-- 여기에 `HWP_PREVIEW_OUT=<폴더>`를 더하면 각 문서 앞 3쪽을 Java2D로 그려 PNG로 저장한다(`HWP_PREVIEW_FILTER`로 파일명 필터).
-
-## 릴리스 만들기
-
-`v`로 시작하는 태그를 push하면 CI가 릴리스 APK를 서명·빌드해 같은 이름의 릴리스에 첨부한다.
-저장소 Secrets에 `RELEASE_KEYSTORE_BASE64`(키스토어 파일의 base64)와 `RELEASE_KEYSTORE_PASSWORD`가 있어야 한다(키 별칭 `hwpbyhwp`).
-
-```
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-또는 Actions 탭의 CI 워크플로에서 Run workflow를 눌러 버전(`v0.1.0`)을 넣으면 같은 일을 한다.
+- CI(GitHub Actions)는 `core` 테스트를 돌린 뒤 디버그 APK를 아티팩트로 올립니다.
+- 디버그 APK의 앱 ID는 `io.hwpbyhwp.viewer.debug`입니다. 저장소의 공개 키(`app/debug.keystore`)로 서명되어, 릴리스판과 별도 앱으로 설치됩니다.
+- 릴리스는 두 가지로 만들 수 있습니다.
+  - Actions → CI → Run workflow에 버전(예: `v0.1.1`)을 넣습니다.
+  - `v`로 시작하는 태그를 push합니다.
+- 릴리스 APK는 저장소에 없는 비공개 키로 서명합니다. 저장소 Secrets에 `RELEASE_KEYSTORE_BASE64`(키스토어의 base64)와 `RELEASE_KEYSTORE_PASSWORD`가 있어야 합니다(키 별칭 `hwpbyhwp`).
 
 ## 라이선스
 
-[Apache License 2.0](LICENSE).
+[Apache License 2.0](LICENSE)
 
-- 번들 글꼴 Noto Sans/Serif KR: SIL Open Font License 1.1 ([app/src/main/assets/fonts/LICENSE-OFL.txt](app/src/main/assets/fonts/LICENSE-OFL.txt))
+- 함께 들어 있는 글꼴 Noto Sans KR·Noto Serif KR: SIL Open Font License 1.1 ([전문](app/src/main/assets/fonts/LICENSE-OFL.txt))
 - hwplib, hwpxlib: Apache License 2.0
