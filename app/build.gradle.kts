@@ -20,18 +20,35 @@ android {
     signingConfigs {
         // A fixed debug key in the repository: CI machines would otherwise each generate their own,
         // and Android refuses to update an app with an APK signed by a different key.
-        // Not secret — it only signs debug builds.
+        // Not secret — it only signs debug builds, which install as a separate app.
         getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        // The release key stays out of the repository: CI writes it from repository secrets.
+        val releaseStore = providers.environmentVariable("RELEASE_KEYSTORE_FILE").orNull
+        if (releaseStore != null) {
+            create("release") {
+                storeFile = file(releaseStore)
+                storePassword = providers.environmentVariable("RELEASE_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("RELEASE_KEY_ALIAS").orNull ?: "hwpbyhwp"
+                keyPassword = providers.environmentVariable("RELEASE_KEY_PASSWORD").orNull
+                    ?: providers.environmentVariable("RELEASE_KEYSTORE_PASSWORD").get()
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            // A separate app id: debug builds (public key) never update the released app.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

@@ -5,7 +5,7 @@
 ## 설치
 
 [Releases](../../releases)에서 최신 `hwpbyhwp-*.apk`를 받아 설치한다(알 수 없는 출처 앱 설치 허용 필요).
-APK는 공개된 디버그 키로 서명된 시험판이다.
+릴리스 APK는 저장소에 없는 비공개 키로 서명된다. CI 아티팩트의 디버그 APK는 공개 디버그 키로 서명되며 앱 ID가 달라(`io.hwpbyhwp.viewer.debug`) 별도 앱으로 설치된다.
 
 ## 구조
 
@@ -46,7 +46,8 @@ APK는 공개된 디버그 키로 서명된 시험판이다.
 
 ## 릴리스 만들기
 
-`v`로 시작하는 태그를 push하면 CI가 APK를 빌드해 같은 이름의 릴리스에 첨부한다.
+`v`로 시작하는 태그를 push하면 CI가 릴리스 APK를 서명·빌드해 같은 이름의 릴리스에 첨부한다.
+저장소 Secrets에 `RELEASE_KEYSTORE_BASE64`(키스토어 파일의 base64)와 `RELEASE_KEYSTORE_PASSWORD`가 있어야 한다(키 별칭 `hwpbyhwp`).
 
 ```
 git tag v0.1.0 && git push origin v0.1.0
