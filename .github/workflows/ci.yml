@@ -2,11 +2,15 @@ name: CI
 
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
   pull_request:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -27,3 +31,11 @@ jobs:
         with:
           name: hwpbyhwp-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/debug/*.apk "hwpbyhwp-${GITHUB_REF_NAME}.apk"
+          gh release create "$GITHUB_REF_NAME" "hwpbyhwp-${GITHUB_REF_NAME}.apk" --title "$GITHUB_REF_NAME" --generate-notes

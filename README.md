@@ -2,6 +2,11 @@
 
 안드로이드용 HWP/HWPX 문서 뷰어.
 
+## 설치
+
+[Releases](../../releases)에서 최신 `hwpbyhwp-*.apk`를 받아 설치한다(알 수 없는 출처 앱 설치 허용 필요).
+APK는 공개된 디버그 키로 서명된 시험판이다.
+
 ## 구조
 
 | 모듈 | 내용 | 빌드 |
@@ -38,3 +43,18 @@
 
 - `HWP_SAMPLES=<폴더> ./gradlew :core:test`: 폴더 안의 모든 문서를 읽고, 저장된 줄 배치로 여백 단위 변환을 교차 검증한다.
 - 여기에 `HWP_PREVIEW_OUT=<폴더>`를 더하면 각 문서 앞 3쪽을 Java2D로 그려 PNG로 저장한다(`HWP_PREVIEW_FILTER`로 파일명 필터).
+
+## 릴리스 만들기
+
+`v`로 시작하는 태그를 push하면 CI가 APK를 빌드해 같은 이름의 릴리스에 첨부한다.
+
+```
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+## 라이선스
+
+[Apache License 2.0](LICENSE).
+
+- 번들 글꼴 Noto Sans/Serif KR: SIL Open Font License 1.1 ([app/src/main/assets/fonts/LICENSE-OFL.txt](app/src/main/assets/fonts/LICENSE-OFL.txt))
+- hwplib, hwpxlib: Apache License 2.0
