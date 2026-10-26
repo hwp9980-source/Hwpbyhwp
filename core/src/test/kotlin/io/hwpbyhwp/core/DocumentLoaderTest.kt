@@ -105,4 +105,22 @@ class DocumentLoaderTest {
 
     private fun writeHwpx(hwpx: HWPXFile): File =
         File(dir, "doc${System.nanoTime()}.hwpx").also { HWPXWriter.toFilepath(hwpx, it.path) }
+
+    @Test
+    fun unsignedAttributeValuesBecomeSigned() {
+        val dir = kotlin.io.path.createTempDirectory().toFile()
+        val from = java.io.File(dir, "in.hwpx")
+        java.util.zip.ZipOutputStream(from.outputStream()).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry("mimetype")); zip.write("application/hwp+zip".toByteArray()); zip.closeEntry()
+            zip.putNextEntry(java.util.zip.ZipEntry("Contents/section0.xml"))
+            zip.write("""<hp:lineShape width="4294967291" color="#000000" id="1234567890"/>""".toByteArray())
+            zip.closeEntry()
+        }
+        val to = java.io.File(dir, "out.hwpx")
+        kotlin.test.assertTrue(DocumentLoader.signUnsignedAttributes(from, to))
+        val xml = java.util.zip.ZipFile(to).use { z -> z.getInputStream(z.getEntry("Contents/section0.xml")).readBytes().decodeToString() }
+        // Only values beyond the signed range change.
+        kotlin.test.assertEquals("""<hp:lineShape width="-5" color="#000000" id="1234567890"/>""", xml)
+        dir.deleteRecursively()
+    }
 }

@@ -321,7 +321,7 @@ internal class HwpxConverter(private val hwpx: HWPXFile) {
             transform = c.renderingInfo().toAffine(),
             points = points,
             stroke = lineShape?.takeIf { it.style() != null && it.style() != LineType2.NONE }?.let {
-                Stroke(parseColor(it.color()) ?: CharShape.BLACK, it.width() ?: 0, it.style().toBorderStyle())
+                Stroke(parseColor(it.color()) ?: CharShape.BLACK, (it.width() ?: 0).coerceAtLeast(0), it.style().toBorderStyle())
             },
             fill = drawing?.fillBrush()?.winBrush()?.faceColor()?.let(::parseColor),
             roundRatio = (c as? XRectangle)?.ratio()?.toInt() ?: 0,
