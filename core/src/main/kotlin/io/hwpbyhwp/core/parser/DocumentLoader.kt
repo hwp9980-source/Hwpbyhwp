@@ -6,6 +6,9 @@ import kr.dogfoot.hwplib.reader.HWPReader
 import kr.dogfoot.hwpxlib.reader.HWPXReader
 import java.io.File
 import java.io.InputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 enum class DocumentFormat { HWP, HWPX }
 
@@ -38,7 +41,7 @@ object DocumentLoader {
         return try {
             when (format) {
                 DocumentFormat.HWP -> HwpConverter(HWPReader.fromFile(file)).convert()
-                DocumentFormat.HWPX -> HwpxConverter(HWPXReader.fromFile(file)).convert()
+                DocumentFormat.HWPX -> readHwpx(file)
             }.withMetafileBitmaps()
         } catch (e: UnsupportedDocumentException) {
             throw e
@@ -71,5 +74,46 @@ object DocumentLoader {
             Wmf.embeddedBitmaps(data).mapIndexed { i, bmp -> Wmf.bitmapKey(id, i) to bmp }
         }
         return if (extra.isEmpty()) this else copy(binaries = binaries + extra)
+    }
+
+    private fun readHwpx(file: File): Document = try {
+        HwpxConverter(HWPXReader.fromFile(file)).convert()
+    } catch (e: NumberFormatException) {
+        // Hangul writes some negative values as unsigned 32-bit numbers (a line width of -5 as
+        // 4294967291), which hwpxlib cannot parse. Read again with those values made signed.
+        val fixed = File.createTempFile("signed", ".hwpx", file.absoluteFile.parentFile)
+        try {
+            if (!signUnsignedAttributes(file, fixed)) throw e
+            HwpxConverter(HWPXReader.fromFile(fixed)).convert()
+        } finally {
+            fixed.delete()
+        }
+    }
+
+    /** Numbers 2^31..2^32-1 in XML attributes, which only fit as signed 32-bit values. */
+    private val UNSIGNED_ATTRIBUTE = Regex("""(="\s*)(\d{10})(\s*")""")
+
+    /** Copies the HWPX package [from] into [to] with such values made signed; false if there were none. */
+    internal fun signUnsignedAttributes(from: File, to: File): Boolean {
+        var changed = false
+        ZipFile(from).use { zip ->
+            ZipOutputStream(to.outputStream().buffered()).use { out ->
+                for (entry in zip.entries()) {
+                    var bytes = zip.getInputStream(entry).use { it.readBytes() }
+                    if (entry.name.endsWith(".xml", ignoreCase = true)) {
+                        val text = String(bytes, Charsets.UTF_8)
+                        val signed = UNSIGNED_ATTRIBUTE.replace(text) { m ->
+                            val v = m.groupValues[2].toLong()
+                            if (v in 0x80000000L..0xFFFFFFFFL) m.groupValues[1] + (v - 0x100000000L) + m.groupValues[3] else m.value
+                        }
+                        if (signed != text) { changed = true; bytes = signed.toByteArray(Charsets.UTF_8) }
+                    }
+                    out.putNextEntry(ZipEntry(entry.name))
+                    out.write(bytes)
+                    out.closeEntry()
+                }
+            }
+        }
+        return changed
     }
 }
